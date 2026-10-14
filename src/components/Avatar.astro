@@ -1,0 +1,8 @@
+---
+import { iniciales } from '../lib/ekr';
+interface Props { nombre?: string | null; size?: 'sm' | 'md' }
+const { nombre, size = 'md' } = Astro.props;
+---
+<span class:list={['grid shrink-0 place-items-center rounded-full bg-dusty-rose/20 font-bold text-rose-deep', size === 'sm' ? 'size-7 text-[10px]' : 'size-9 text-xs']}>
+  {iniciales(nombre)}
+</span>

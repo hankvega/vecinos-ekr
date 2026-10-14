@@ -1,0 +1,345 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Badge from '../../../components/Badge.astro';
+import Icon from '../../../components/Icon.astro';
+import Empty from '../../../components/Empty.astro';
+import Avatar from '../../../components/Avatar.astro';
+import {
+  getEkrContext, back, str, oneOf, porId, hace, fmtDate, firstError,
+  ESTADOS_SOLICITUD, PRIORIDADES,
+} from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase, profile } = ctx;
+const filtro = Astro.url.searchParams.get('estado') ?? 'solicitado';
+const aqui = `/ekr/solicitudes?estado=${encodeURIComponent(filtro)}`;
+
+const TIPOS_INSUMO = [
+  'panal_abierto','panal_calzon','sabanilla',
+  'toalla_humeda','crema','ensure','otro',
+] as const;
+const TIPOS_LABEL: Record<string, string> = {
+  panal_abierto: 'Pañal abierto',
+  panal_calzon: 'Pañal calzón',
+  sabanilla: 'Sabanilla',
+  toalla_humeda: 'Toalla húmeda',
+  crema: 'Crema',
+  ensure: 'Ensure',
+  otro: 'Otro',
+};
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = str(form, 'intent');
+
+  if (intent === 'crear') {
+    const beneficiario_id = str(form, 'beneficiario_id');
+    const urgencia = oneOf(str(form, 'urgencia'), ['alta','media','baja'] as const) ?? 'media';
+    const notas = str(form, 'notas');
+
+    if (!beneficiario_id) return back(aqui, 'error', 'Elige a qué beneficiario corresponde.');
+
+    // Leer los ítems del form
+    const tipos = form.getAll('item_tipo').map((v) => String(v));
+    const tallas = form.getAll('item_talla').map((v) => String(v));
+    const cantidades = form.getAll('item_cantidad').map((v) => String(v));
+
+    const items: { tipo: string; talla: string | null; cantidad: number }[] = [];
+    for (let i = 0; i < tipos.length; i++) {
+      const tipo = oneOf(tipos[i] || null, TIPOS_INSUMO);
+      const talla = tallas[i]?.trim() || null;
+      const cantidad = Math.floor(Number(cantidades[i] ?? '1'));
+      if (!tipo) continue;                        // fila vacía → saltar
+      if (!Number.isFinite(cantidad) || cantidad < 1 || cantidad > 9999) {
+        return back(aqui, 'error', `La cantidad del ítem ${i + 1} no es válida (1-9999).`);
+      }
+      items.push({ tipo, talla, cantidad });
+    }
+
+    if (items.length === 0) return back(aqui, 'error', 'Agrega al menos un insumo.');
+
+    // 1. Crear cabecera
+    const { data: solicitud, error: e1 } = await supabase
+      .from('insumo_solicitudes')
+      .insert({
+        beneficiario_id,
+        voluntaria_id: profile.id,
+        estado: 'solicitado',
+        fecha_solicitud: new Date().toISOString().slice(0, 10),
+        notas,
+        urgencia,
+      })
+      .select('id')
+      .single();
+
+    if (e1 || !solicitud) return back(aqui, 'error', 'No se pudo crear: ' + (e1?.message ?? 'error'));
+
+    // 2. Crear todos los ítems de una vez
+    const { error: e2 } = await supabase.from('insumo_items').insert(
+      items.map((it) => ({ ...it, solicitud_id: solicitud.id })),
+    );
+    if (e2) return back(aqui, 'error', 'No se pudieron guardar los ítems: ' + e2.message);
+
+    return back('/ekr/solicitudes?estado=solicitado', 'ok', `Solicitud registrada con ${items.length} ítem(s).`);
+  }
+
+  if (intent === 'resolver') {
+    const id = str(form, 'id');
+    const accion = str(form, 'accion');
+    const respuesta = str(form, 'respuesta');
+    const destino = oneOf(accion, ['aprobar','rechazar','entregar'] as const);
+    if (!id || !destino) return back(aqui, 'error', 'Acción no válida.');
+
+    if (destino === 'rechazar' && !respuesta)
+      return back(aqui, 'error', 'Para rechazar, escribe el motivo.');
+
+    const estado = { aprobar: 'aprobado', rechazar: 'rechazado', entregar: 'entregado' }[destino];
+    const permitido = { aprobar: 'solicitado', rechazar: 'solicitado', entregar: 'aprobado' }[destino];
+
+    const updates: Record<string, any> = {
+      estado,
+      respuesta: respuesta ?? null,
+      resuelto_por: profile.id,
+      resuelto_at: new Date().toISOString(),
+    };
+    if (estado === 'aprobado')  updates.fecha_aprobacion = new Date().toISOString().slice(0, 10);
+    if (estado === 'entregado') updates.fecha_entrega    = new Date().toISOString().slice(0, 10);
+
+    const { data, error } = await supabase
+      .from('insumo_solicitudes')
+      .update(updates)
+      .eq('id', id)
+      .eq('estado', permitido)
+      .select('id');
+
+    if (error) return back(aqui, 'error', 'No se pudo actualizar: ' + error.message);
+    if (!data || data.length === 0)
+      return back(aqui, 'error', 'La solicitud ya cambió de estado. Se actualizó la lista.');
+
+    return back(aqui, 'ok', `Solicitud ${estado}.`);
+  }
+}
+
+const [sol, ben, prof, items] = await Promise.all([
+  supabase.from('insumo_solicitudes').select('*'),
+  supabase.from('beneficiarios').select('id,nombre,estado').order('nombre'),
+  supabase.from('profiles').select('id,nombre'),
+  supabase.from('insumo_items').select('*'),
+]);
+
+const loadError = firstError(sol, ben, prof, items);
+const todas = sol.data ?? [];
+const benById = porId<any>(ben.data ?? []);
+const profById = porId<any>(prof.data ?? []);
+const itemsBySolicitud = new Map<number, any[]>();
+for (const it of items.data ?? []) {
+  const arr = itemsBySolicitud.get(it.solicitud_id) ?? [];
+  arr.push(it);
+  itemsBySolicitud.set(it.solicitud_id, arr);
+}
+
+const cuenta = (k: string) => todas.filter((s: any) => s.estado === k).length;
+const lista = todas
+  .filter((s: any) => filtro === 'todas' || s.estado === filtro)
+  .sort((a: any, b: any) =>
+    filtro === 'solicitado'
+      ? (PRIORIDADES[a.urgencia as keyof typeof PRIORIDADES]?.orden ?? 9) -
+        (PRIORIDADES[b.urgencia as keyof typeof PRIORIDADES]?.orden ?? 9) ||
+        a.created_at.localeCompare(b.created_at)
+      : b.created_at.localeCompare(a.created_at),
+  );
+
+const tabs = [
+  ...Object.entries(ESTADOS_SOLICITUD).map(([k, e]) => ({ k, label: e.label, n: cuenta(k) })),
+  { k: 'todas', label: 'Todas', n: todas.length },
+];
+
+// Serializar para el JS del cliente
+const tiposJson = JSON.stringify(TIPOS_LABEL);
+---
+
+<EkrLayout title="Solicitudes de insumos" active="solicitudes" ctx={ctx}>
+  <PageHeader title="Solicitudes de insumos" subtitle="Bandeja de pedidos: aprueba, rechaza con motivo y marca lo entregado.">
+    <a href="/api/ekr/export?hoja=solicitudes" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
+    <a href="#nueva" class="btn btn-primary"><Icon name="plus" size={18} /> Nueva solicitud</a>
+  </PageHeader>
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+
+  <nav aria-label="Filtrar por estado" class="mb-4 flex flex-wrap gap-2">
+    {tabs.map((t) => (
+      <a href={`/ekr/solicitudes?estado=${t.k}`} aria-current={filtro === t.k ? 'page' : undefined} class:list={['rounded-full border px-3.5 py-1.5 text-sm font-medium transition', filtro === t.k ? 'border-blue-slate bg-blue-slate text-white' : 'border-line bg-white text-blue-slate hover:bg-cream']}>
+        {t.label} <span class="ml-1 opacity-70">{t.n}</span>
+      </a>
+    ))}
+  </nav>
+
+  <div class="card">
+    {lista.length === 0 ? (
+      <Empty icon="package" title={filtro === 'solicitado' ? 'No hay solicitudes pendientes' : 'Sin solicitudes en este estado'} text="Cuando el voluntariado pida insumos, aparecerán aquí." />
+    ) : (
+      <ul class="divide-y divide-line">
+        {lista.map((s: any) => {
+          const est = ESTADOS_SOLICITUD[s.estado as keyof typeof ESTADOS_SOLICITUD];
+          const urg = PRIORIDADES[s.urgencia as keyof typeof PRIORIDADES];
+          const sItems = itemsBySolicitud.get(s.id) ?? [];
+          return (
+            <li class="p-5">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h3 class="font-semibold text-ink">
+                      {sItems.length === 0 && 'Sin ítems'}
+                      {sItems.length === 1 && `${TIPOS_LABEL[sItems[0].tipo] ?? sItems[0].tipo}${sItems[0].talla ? ` ${sItems[0].talla}` : ''} × ${sItems[0].cantidad}`}
+                      {sItems.length > 1 && `${sItems.length} ítems`}
+                    </h3>
+                    <Badge tone={est?.tone ?? 'slate'} dot>{est?.label ?? s.estado}</Badge>
+                    {s.estado === 'solicitado' && urg && <Badge tone={urg.tone}>Urgencia {urg.label.toLowerCase()}</Badge>}
+                  </div>
+
+                  {sItems.length > 1 && (
+                    <ul class="mt-1.5 space-y-0.5 text-sm text-ink/80">
+                      {sItems.map((i: any) => (
+                        <li>• {TIPOS_LABEL[i.tipo] ?? i.tipo}{i.talla ? ` ${i.talla}` : ''} × {i.cantidad}</li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <p class="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-blue-slate">
+                    {s.beneficiario_id ? <a class="link" href={`/ekr/beneficiarios/${s.beneficiario_id}`}>{benById.get(s.beneficiario_id)?.nombre ?? '—'}</a> : <span>Uso general</span>}
+                    <span aria-hidden="true">·</span>
+                    <span class="inline-flex items-center gap-1.5"><Avatar nombre={profById.get(s.voluntaria_id)?.nombre} size="sm" /> {profById.get(s.voluntaria_id)?.nombre ?? 'Equipo'}</span>
+                    <span aria-hidden="true">·</span>
+                    <span title={fmtDate(s.created_at)}>{hace(s.created_at)}</span>
+                  </p>
+                  {s.notas && <p class="mt-2 text-sm text-ink/80">{s.notas}</p>}
+                  {s.respuesta && <p class="mt-2 rounded-lg bg-cream px-3 py-2 text-sm text-blue-slate"><strong class="font-semibold text-ink">Respuesta:</strong> {s.respuesta}{s.resuelto_por ? ` — ${profById.get(s.resuelto_por)?.nombre ?? ''}` : ''}</p>}
+                </div>
+
+                {(s.estado === 'solicitado' || s.estado === 'aprobado') && (
+                  <form method="post" class="flex w-full flex-col gap-2 sm:w-80">
+                    <input type="hidden" name="intent" value="resolver" /><input type="hidden" name="id" value={s.id} />
+                    <label class="sr-only" for={`r-${s.id}`}>Respuesta o motivo</label>
+                    <input class="input" id={`r-${s.id}`} name="respuesta" maxlength="300" placeholder={s.estado === 'solicitado' ? 'Respuesta o motivo (obligatorio al rechazar)' : 'Nota de entrega (opcional)'} />
+                    <div class="flex gap-2">
+                      {s.estado === 'solicitado' ? (
+                        <>
+                          <button class="btn btn-primary flex-1" type="submit" name="accion" value="aprobar"><Icon name="check" size={16} /> Aprobar</button>
+                          <button class="btn btn-danger flex-1" type="submit" name="accion" value="rechazar"><Icon name="x" size={16} /> Rechazar</button>
+                        </>
+                      ) : (
+                        <button class="btn btn-primary flex-1" type="submit" name="accion" value="entregar"><Icon name="package-check" size={16} /> Marcar entregada</button>
+                      )}
+                    </div>
+                  </form>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    )}
+  </div>
+
+  <section id="nueva" class="card mt-6 scroll-mt-6 p-5" aria-labelledby="h-nueva">
+    <h2 id="h-nueva" class="font-semibold text-ink">Nueva solicitud</h2>
+    <form method="post" class="mt-4 grid gap-4" id="form-nueva">
+      <input type="hidden" name="intent" value="crear" />
+
+      <!-- Cabecera -->
+      <div class="grid gap-3 md:grid-cols-3">
+        <div class="md:col-span-2">
+          <label class="label" for="beneficiario_id">Para quién *</label>
+          <select class="input" id="beneficiario_id" name="beneficiario_id" required>
+            <option value="">Elegir…</option>
+            {(ben.data ?? []).filter((b: any) => b.estado === 'activo').map((b: any) => <option value={b.id}>{b.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label" for="urgencia">Urgencia</label>
+          <select class="input" id="urgencia" name="urgencia">
+            {Object.entries(PRIORIDADES).map(([k, p]) => <option value={k} selected={k === 'media'}>{p.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <!-- Ítems dinámicos -->
+      <div>
+        <div class="mb-2 flex items-center justify-between">
+          <span class="label mb-0!">Insumos *</span>
+          <button type="button" id="btn-add-item" class="btn btn-ghost btn-sm">
+            <Icon name="plus" size={14} /> Agregar otro
+          </button>
+        </div>
+        <div id="items-container" class="space-y-2"></div>
+      </div>
+
+      <div>
+        <label class="label" for="notas">Notas generales</label>
+        <input class="input" id="notas" name="notas" maxlength="300" placeholder="Ej.: entregar antes del viernes" />
+      </div>
+
+      <div class="flex justify-end">
+        <button class="btn btn-primary" type="submit"><Icon name="plus" size={18} /> Registrar solicitud</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Plantilla de fila de ítem (oculta, clonada por JS) -->
+  <template id="item-row-template">
+    <div class="item-row grid gap-2 sm:grid-cols-[2fr_1fr_1fr_auto]">
+      <div>
+        <label class="label sr-only">Tipo</label>
+        <select class="input item-tipo" name="item_tipo" required>
+          <option value="">Tipo…</option>
+          <!-- Las opciones se llenan por JS -->
+        </select>
+      </div>
+      <div>
+        <label class="label sr-only">Talla</label>
+        <input class="input" name="item_talla" placeholder="Talla" maxlength="10" />
+      </div>
+      <div>
+        <label class="label sr-only">Cantidad</label>
+        <input class="input" type="number" name="item_cantidad" min="1" max="9999" value="1" />
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm remove-item" title="Quitar">
+        <Icon name="trash-2" size={16} />
+      </button>
+    </div>
+  </template>
+
+  <script define:vars={{ TIPOS_LABEL: tiposJson }}>
+    (() => {
+      const tipos = JSON.parse(TIPOS_LABEL);
+      const container = document.getElementById('items-container');
+      const tpl = document.getElementById('item-row-template');
+      const btnAdd = document.getElementById('btn-add-item');
+
+      function fillSelect(select) {
+        for (const [k, label] of Object.entries(tipos)) {
+          const opt = document.createElement('option');
+          opt.value = k;
+          opt.textContent = label;
+          select.appendChild(opt);
+        }
+      }
+
+      function addRow() {
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        fillSelect(node.querySelector('.item-tipo'));
+        node.querySelector('.remove-item').addEventListener('click', () => {
+          if (container.children.length > 1) node.remove();
+        });
+        container.appendChild(node);
+      }
+
+      btnAdd.addEventListener('click', addRow);
+
+      // Arrancar con una fila
+      addRow();
+    })();
+  </script>
+</EkrLayout>

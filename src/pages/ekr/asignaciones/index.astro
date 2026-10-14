@@ -1,0 +1,191 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Badge from '../../../components/Badge.astro';
+import Icon from '../../../components/Icon.astro';
+import Empty from '../../../components/Empty.astro';
+import Avatar from '../../../components/Avatar.astro';
+import { getEkrContext, back, str, hoy, porId, fmtDate, truncar, firstError } from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase } = ctx;
+const aqui = '/ekr/asignaciones';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = str(form, 'intent');
+
+  if (intent === 'crear') {
+    const vol = str(form, 'voluntaria_id');
+    const ben = str(form, 'beneficiario_id');
+    if (!vol || !ben) return back(aqui, 'error', 'Elige a la persona y a su acompañante.');
+    const { error } = await supabase.from('asignaciones').insert({ voluntaria_id: vol, beneficiario_id: ben, notas: str(form, 'notas'), fecha_inicio: hoy() });
+    if (error) return back(aqui, 'error', (error as any).code === '23505' ? 'Esa asignación ya existe.' : 'No se pudo asignar: ' + error.message);
+    return back(aqui, 'ok', 'Asignación creada.');
+  }
+  if (intent === 'finalizar') {
+    const id = str(form, 'id');
+    if (!id) return back(aqui, 'error', 'Falta la asignación.');
+    const { error } = await supabase.from('asignaciones').update({ activa: false, fecha_fin: hoy() }).eq('id', id);
+    if (error) return back(aqui, 'error', 'No se pudo finalizar: ' + error.message);
+    return back(aqui, 'ok', 'Acompañamiento finalizado.');
+  }
+  if (intent === 'nuevo_voluntario') {
+    const nombre = str(form, 'nombre');
+    if (!nombre) return back(aqui, 'error', 'El nombre es obligatorio.');
+    const email = str(form, 'email');
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return back(aqui, 'error', 'El correo no parece válido.');
+    const { error } = await supabase.from('profiles').insert({ nombre, email, telefono: str(form, 'telefono'), rol: 'voluntario', activo: true });
+    if (error) return back(aqui, 'error', 'No se pudo agregar: ' + error.message);
+    return back(aqui, 'ok', `${nombre} fue agregado/a al voluntariado.`);
+  }
+  if (intent === 'toggle_voluntario') {
+    const id = str(form, 'id');
+    const activo = str(form, 'activo') === 'true';
+    if (!id) return back(aqui, 'error', 'Falta el voluntario/a.');
+    const { error } = await supabase.from('profiles').update({ activo }).eq('id', id).eq('rol', 'voluntario');
+    if (error) return back(aqui, 'error', 'No se pudo actualizar: ' + error.message);
+    return back(aqui, 'ok', activo ? 'Voluntario/a reactivado/a.' : 'Voluntario/a marcado/a como inactivo/a.');
+  }
+}
+
+const [ben, prof, asig] = await Promise.all([
+  supabase.from('beneficiarios').select('*').order('nombre'),
+  supabase.from('profiles').select('*').order('nombre'),
+  supabase.from('asignaciones').select('*').order('fecha_inicio', { ascending: false }),
+]);
+const loadError = firstError(ben, prof, asig);
+const beneficiarios = ben.data ?? [];
+const benById = porId<any>(beneficiarios);
+const profById = porId<any>(prof.data ?? []);
+const voluntarios = (prof.data ?? []).filter((p: any) => p.rol === 'voluntario');
+const vigentes = (asig.data ?? []).filter((a: any) => a.activa);
+const historial = (asig.data ?? []).filter((a: any) => !a.activa).slice(0, 8);
+
+const cargas = new Map<string, number>();
+for (const a of vigentes) cargas.set(a.voluntaria_id, (cargas.get(a.voluntaria_id) ?? 0) + 1);
+const conVol = new Set(vigentes.map((a: any) => a.beneficiario_id));
+const sinVol = beneficiarios.filter((b: any) => b.estado === 'activo' && !conVol.has(b.id));
+const activosDisp = voluntarios.filter((v: any) => v.activo).sort((a: any, b: any) => (cargas.get(a.id) ?? 0) - (cargas.get(b.id) ?? 0));
+const maxCarga = Math.max(1, ...voluntarios.map((v: any) => cargas.get(v.id) ?? 0));
+const preBen = Astro.url.searchParams.get('beneficiario') ?? '';
+---
+<EkrLayout title="Asignaciones" active="asignaciones" ctx={ctx}>
+  <PageHeader title="Asignaciones" subtitle="Quién acompaña a quién. Asigna, reasigna y revisa la carga de cada voluntario/a.">
+    <a href="/api/ekr/export?hoja=asignaciones" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
+  </PageHeader>
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+
+  <div class="grid items-start gap-6 xl:grid-cols-3">
+    <div class="space-y-6 xl:col-span-2">
+      <!-- Nueva asignación -->
+      <section class="card p-5" aria-labelledby="h-nueva">
+        <h2 id="h-nueva" class="font-semibold text-ink">Nueva asignación</h2>
+        <form method="post" class="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+          <input type="hidden" name="intent" value="crear" />
+          <div>
+            <label class="label" for="beneficiario_id">Persona acompañada</label>
+            <select class="input" id="beneficiario_id" name="beneficiario_id" required>
+              <option value="">Elegir…</option>
+              {sinVol.length > 0 && <optgroup label="Sin acompañante">{sinVol.map((b: any) => <option value={b.id} selected={preBen === b.id}>{b.nombre}</option>)}</optgroup>}
+              <optgroup label="Otros activos">
+                {beneficiarios.filter((b: any) => b.estado === 'activo' && conVol.has(b.id)).map((b: any) => <option value={b.id} selected={preBen === b.id}>{b.nombre}</option>)}
+              </optgroup>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="voluntaria_id">Voluntario/a</label>
+            <select class="input" id="voluntaria_id" name="voluntaria_id" required>
+              <option value="">Elegir…</option>
+              {activosDisp.map((v: any) => <option value={v.id}>{v.nombre} — {cargas.get(v.id) ?? 0} vigente(s)</option>)}
+            </select>
+          </div>
+          <button class="btn btn-primary" type="submit"><Icon name="heart-handshake" size={18} /> Asignar</button>
+          <div class="md:col-span-3"><label class="label" for="notas">Nota (opcional)</label><input class="input" id="notas" name="notas" maxlength="200" placeholder="Ej.: visita los martes por la tarde" /></div>
+        </form>
+        {sinVol.length > 0 && <p class="mt-3 text-sm text-salmon-deep">{sinVol.length} persona(s) activa(s) esperan acompañante: {sinVol.slice(0, 3).map((b: any) => b.nombre).join(', ')}{sinVol.length > 3 ? '…' : ''}.</p>}
+      </section>
+
+      <!-- Vigentes -->
+      <section class="card" aria-labelledby="h-vig">
+        <div class="border-b border-line px-5 py-4"><h2 id="h-vig" class="font-semibold text-ink">Acompañamientos vigentes <span class="font-normal text-blue-slate">({vigentes.length})</span></h2></div>
+        {vigentes.length === 0 ? <Empty icon="heart-handshake" title="Aún no hay asignaciones vigentes" /> : (
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="border-b border-line bg-cream/60"><tr><th class="th">Persona</th><th class="th">Voluntario/a</th><th class="th">Desde</th><th class="th">Nota</th><th class="th"><span class="sr-only">Acciones</span></th></tr></thead>
+              <tbody>
+                {vigentes.map((a: any) => (
+                  <tr class="border-t border-line hover:bg-cream/60">
+                    <td class="td"><a href={`/ekr/beneficiarios/${a.beneficiario_id}`} class="font-semibold text-ink hover:underline">{benById.get(a.beneficiario_id)?.nombre ?? '—'}</a></td>
+                    <td class="td"><span class="flex items-center gap-2"><Avatar nombre={profById.get(a.voluntaria_id)?.nombre} size="sm" />{profById.get(a.voluntaria_id)?.nombre ?? '—'}</span></td>
+                    <td class="td whitespace-nowrap text-blue-slate">{fmtDate(a.fecha_inicio)}</td>
+                    <td class="td text-blue-slate">{truncar(a.notas, 50) || '—'}</td>
+                    <td class="td text-right">
+                      <form method="post" data-confirm="¿Finalizar este acompañamiento?">
+                        <input type="hidden" name="intent" value="finalizar" /><input type="hidden" name="id" value={a.id} />
+                        <button class="btn btn-ghost btn-sm" type="submit">Finalizar</button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {historial.length > 0 && (
+          <details class="border-t border-line px-5 py-3 text-sm">
+            <summary class="cursor-pointer font-medium text-blue-slate">Finalizados recientemente</summary>
+            <ul class="mt-2 space-y-1.5 text-blue-slate">
+              {historial.map((a: any) => (
+                <li>
+                  {benById.get(a.beneficiario_id)?.nombre ?? '—'} · {profById.get(a.voluntaria_id)?.nombre ?? '—'} · {fmtDate(a.fecha_inicio)} → {fmtDate(a.fecha_fin)}
+                  {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </section>
+    </div>
+
+    <!-- Voluntarios -->
+    <div class="space-y-6">
+      <section class="card" aria-labelledby="h-vol">
+        <div class="border-b border-line px-5 py-4"><h2 id="h-vol" class="font-semibold text-ink">Voluntariado <span class="font-normal text-blue-slate">({voluntarios.filter((v: any) => v.activo).length} activos)</span></h2></div>
+        {voluntarios.length === 0 ? <Empty icon="users" title="Aún no hay voluntarios/as" text="Agrégalos con el formulario de abajo." /> : (
+          <ul class="divide-y divide-line">
+            {voluntarios.map((v: any) => (
+              <li class:list={['flex items-center gap-3 px-5 py-3', !v.activo && 'opacity-60']}>
+                <Avatar nombre={v.nombre} />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm font-semibold text-ink">{v.nombre}</p>
+                  <div class="mt-1 flex items-center gap-2">
+                    <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-line" role="img" aria-label={`${cargas.get(v.id) ?? 0} acompañamientos`}><div class="h-full rounded-full bg-dusty-rose" style={`width:${((cargas.get(v.id) ?? 0) / maxCarga) * 100}%`}></div></div>
+                    <span class="text-xs text-blue-slate tabular-nums">{cargas.get(v.id) ?? 0}</span>
+                  </div>
+                </div>
+                {v.activo ? null : <Badge>Inactivo/a</Badge>}
+                <form method="post" data-confirm={v.activo ? `¿Marcar a ${v.nombre} como inactivo/a?` : undefined}>
+                  <input type="hidden" name="intent" value="toggle_voluntario" /><input type="hidden" name="id" value={v.id} /><input type="hidden" name="activo" value={String(!v.activo)} />
+                  <button class="btn btn-ghost btn-sm" type="submit" title={v.activo ? 'Desactivar' : 'Reactivar'}>{v.activo ? 'Desactivar' : 'Reactivar'}</button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form method="post" class="space-y-2 border-t border-line p-5">
+          <input type="hidden" name="intent" value="nuevo_voluntario" />
+          <p class="label mb-0!">Agregar voluntario/a</p>
+          <input class="input" name="nombre" required maxlength="120" placeholder="Nombre completo *" aria-label="Nombre completo" />
+          <div class="grid grid-cols-2 gap-2">
+            <input class="input" type="email" name="email" placeholder="Correo" aria-label="Correo" />
+            <input class="input" type="tel" name="telefono" placeholder="Teléfono" aria-label="Teléfono" />
+          </div>
+          <button class="btn btn-primary w-full" type="submit"><Icon name="user-plus" size={16} /> Agregar</button>
+        </form>
+      </section>
+    </div>
+  </div>
+</EkrLayout>

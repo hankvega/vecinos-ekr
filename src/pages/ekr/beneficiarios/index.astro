@@ -1,0 +1,188 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Badge from '../../../components/Badge.astro';
+import Icon from '../../../components/Icon.astro';
+import Empty from '../../../components/Empty.astro';
+import {
+  getEkrContext, firstError, porId,
+  ESTADOS_BENEFICIARIO, ESTADOS_BENEFICIARIO_KEYS,
+} from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase } = ctx;
+
+const q = (Astro.url.searchParams.get('q') ?? '').trim();
+const estado = Astro.url.searchParams.get('estado') ?? '';
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const PER = 20;
+
+const [ben, asig, prof, cuid] = await Promise.all([
+  supabase.from('beneficiarios').select('*').order('nombre'),
+  supabase.from('asignaciones').select('*').eq('activa', true),
+  supabase.from('profiles').select('id,nombre'),
+  supabase.from('cuidadores').select('id,beneficiario_id,nombre'),
+]);
+const loadError = firstError(ben, asig, prof, cuid);
+const todos = ben.data ?? [];
+
+const volById = porId<any>(prof.data ?? []);
+const volPorBen = new Map<number, any[]>();
+for (const a of asig.data ?? []) {
+  const v = volById.get(a.voluntaria_id);
+  if (v) {
+    const arr = volPorBen.get(a.beneficiario_id) ?? [];
+    arr.push({ id: v.id, nombre: v.nombre });
+    volPorBen.set(a.beneficiario_id, arr);
+  }
+}
+
+const cuidPorBen = new Map<number, any[]>();
+for (const c of cuid.data ?? []) {
+  const arr = cuidPorBen.get(c.beneficiario_id) ?? [];
+  arr.push({ id: c.id, nombre: c.nombre });
+  cuidPorBen.set(c.beneficiario_id, arr);
+}
+
+const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const qn = norm(q);
+const filtrados = todos.filter((b: any) =>
+  (!estado || b.estado === estado) &&
+  (!qn || norm([b.nombre, b.rut, b.comuna, b.telefono].filter(Boolean).join(' ')).includes(qn)));
+
+const totalPag = Math.max(1, Math.ceil(filtrados.length / PER));
+const actual = Math.min(page, totalPag);
+const vista = filtrados.slice((actual - 1) * PER, actual * PER);
+
+const cuenta = (k: string) => todos.filter((b: any) => b.estado === k).length;
+const href = (over: Record<string, string | number>) => {
+  const p = new URLSearchParams();
+  if (q) p.set('q', q);
+  if (estado) p.set('estado', estado);
+  for (const [k, v] of Object.entries(over)) {
+    if (v === '' || (v === 1 && k === 'page')) p.delete(k);
+    else p.set(k, String(v));
+  }
+  const s = p.toString();
+  return '/ekr/beneficiarios' + (s ? `?${s}` : '');
+};
+---
+
+<EkrLayout title="Beneficiarios" active="beneficiarios" ctx={ctx}>
+  <PageHeader title="Beneficiarios" subtitle={`${todos.length} personas registradas`}>
+    <a href="/api/ekr/export?hoja=beneficiarios" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
+    <a href="/ekr/beneficiarios/nuevo" class="btn btn-primary"><Icon name="user-plus" size={18} /> Nuevo beneficiario</a>
+  </PageHeader>
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+
+  <div class="card">
+    <div class="flex flex-col gap-4 border-b border-line p-4 lg:flex-row lg:items-center lg:justify-between">
+      <nav aria-label="Filtrar por estado" class="flex flex-wrap gap-2">
+        <a href={href({ estado: '', page: 1 })} class:list={['rounded-full border px-3 py-1.5 text-sm font-medium transition', !estado ? 'border-blue-slate bg-blue-slate text-white' : 'border-line bg-white text-blue-slate hover:bg-cream']}>
+          Todos <span class="ml-1 opacity-70">{todos.length}</span>
+        </a>
+        {ESTADOS_BENEFICIARIO_KEYS.map((k) => (
+          <a href={href({ estado: k, page: 1 })} class:list={['rounded-full border px-3 py-1.5 text-sm font-medium transition', estado === k ? 'border-blue-slate bg-blue-slate text-white' : 'border-line bg-white text-blue-slate hover:bg-cream']}>
+            {ESTADOS_BENEFICIARIO[k].label} <span class="ml-1 opacity-70">{cuenta(k)}</span>
+          </a>
+        ))}
+      </nav>
+      <form method="get" class="flex gap-2" role="search">
+        {estado && <input type="hidden" name="estado" value={estado} />}
+        <div class="relative">
+          <Icon name="search" size={16} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-blue-slate/60" />
+          <input class="input w-64 pl-9" type="search" name="q" value={q} placeholder="Buscar nombre, RUT, comuna…" aria-label="Buscar beneficiarios" />
+        </div>
+        <button class="btn btn-ghost" type="submit">Buscar</button>
+      </form>
+    </div>
+
+    {vista.length === 0 ? (
+      <Empty icon="users" title="No hay resultados" text={q || estado ? 'Prueba con otro filtro o búsqueda.' : 'Aún no hay beneficiarios registrados.'}>
+        <a href="/ekr/beneficiarios/nuevo" class="btn btn-primary">Registrar el primero</a>
+      </Empty>
+    ) : (
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="border-b border-line bg-cream/60">
+            <tr>
+              <th class="th">Nombre</th>
+              <th class="th">Estado</th>
+              <th class="th">Voluntario/a</th>
+              <th class="th">Cuidador/a</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vista.map((b: any) => {
+              const vols = volPorBen.get(b.id) ?? [];
+              const cuids = cuidPorBen.get(b.id) ?? [];
+              const est = ESTADOS_BENEFICIARIO[b.estado as keyof typeof ESTADOS_BENEFICIARIO];
+              return (
+                <tr class="border-t border-line transition hover:bg-cream/60">
+                  <td class="td">
+                    <a class="link font-medium" href={`/ekr/beneficiarios/${b.id}`}>{b.nombre}</a>
+                  </td>
+                  <td class="td">
+                    <Badge tone={est?.tone ?? 'slate'} dot>{est?.label ?? b.estado}</Badge>
+                  </td>
+                  <td class="td max-w-xs">
+                    {vols.length === 0 ? (
+                      b.estado === 'activo' ? (
+                        <a href={`/ekr/beneficiarios/${b.id}`} class="inline-flex items-center gap-1 rounded-full bg-salmon/15 px-2 py-0.5 text-xs font-semibold text-salmon-deep hover:bg-salmon/25">
+                          <Icon name="plus" size={12} /> Sin asignar
+                        </a>
+                      ) : (
+                        <span class="text-blue-slate/60">—</span>
+                      )
+                    ) : (
+                      <div class="flex flex-wrap gap-1">
+                        {vols.map((v: any) => (
+                          <a
+                            key={v.id}
+                            href={`/ekr/voluntarios/${v.id}`}
+                            class="rounded-full bg-cream px-2 py-0.5 text-xs font-medium text-ink hover:bg-rosy-taupe/30"
+                          >
+                            {v.nombre}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td class="td max-w-xs">
+                    {cuids.length === 0 ? (
+                      <span class="text-blue-slate/60">—</span>
+                    ) : (
+                      <div class="flex flex-wrap gap-1">
+                        {cuids.map((c: any) => (
+                          <a
+                            key={c.id}
+                            href={`/ekr/cuidadores/${c.id}`}
+                            class="rounded-full bg-cream px-2 py-0.5 text-xs font-medium text-ink hover:bg-rosy-taupe/30"
+                          >
+                            {c.nombre}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    {vista.length > 0 && totalPag > 1 && (
+      <div class="flex items-center justify-between border-t border-line px-4 py-3 text-sm text-blue-slate">
+        <span>Mostrando {(actual - 1) * PER + 1}–{(actual - 1) * PER + vista.length} de {filtrados.length}</span>
+        <div class="flex gap-2">
+          {actual > 1 && <a class="btn btn-ghost btn-sm" href={href({ page: actual - 1 })}><Icon name="chevron-left" size={14} /> Anterior</a>}
+          {actual < totalPag && <a class="btn btn-ghost btn-sm" href={href({ page: actual + 1 })}>Siguiente <Icon name="chevron-right" size={14} /></a>}
+        </div>
+      </div>
+    )}
+  </div>
+</EkrLayout>

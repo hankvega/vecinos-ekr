@@ -1,0 +1,15 @@
+---
+import Icon from './Icon.astro';
+import { TONE_ICON, type Tone } from '../lib/ekr';
+interface Props { label: string; value: string | number; hint?: string; icon: string; tone?: Tone; href?: string }
+const { label, value, hint, icon, tone = 'slate', href } = Astro.props;
+const Tag = href ? 'a' : 'div';
+---
+<Tag href={href} class:list={['card group block p-5', href && 'transition hover:border-rosy-taupe hover:shadow-md']}>
+  <div class="flex items-start justify-between gap-3">
+    <p class="text-sm font-medium text-blue-slate">{label}</p>
+    <span class:list={['grid size-9 place-items-center rounded-xl', TONE_ICON[tone]]}><Icon name={icon} size={18} /></span>
+  </div>
+  <p class="mt-3 text-3xl font-bold tracking-tight text-ink tabular-nums">{value}</p>
+  {hint && <p class="mt-1 text-xs text-blue-slate/80">{hint}</p>}
+</Tag>

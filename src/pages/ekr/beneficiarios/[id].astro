@@ -1,0 +1,588 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import BeneficiarioForm from '../../../components/BeneficiarioForm.astro';
+import Badge from '../../../components/Badge.astro';
+import Icon from '../../../components/Icon.astro';
+import Avatar from '../../../components/Avatar.astro';
+import {
+  getEkrContext, back, str, oneOf, leerBeneficiario, cerrarAsignaciones, porId, hoy,
+  ESTADOS_BENEFICIARIO, ESTADOS_SOLICITUD, PRIORIDADES, ACCION_AUDITORIA, fmtDate, fmtDateTime, edad, hace, truncar, limpiarRut,
+  TIPOS_BITACORA, TIPOS_BITACORA_KEYS,
+} from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase, isAdmin } = ctx;
+const id = Astro.params.id!;
+const aqui = `/ekr/beneficiarios/${id}`;
+
+const { data: actual } = await supabase.from('beneficiarios').select('*').eq('id', id).maybeSingle();
+if (!actual) return back('/ekr/beneficiarios', 'error', 'No se encontró ese beneficiario.');
+
+let values: Record<string, any> = actual;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = str(form, 'intent');
+
+  if (intent === 'guardar') {
+    values = Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === 'string'));
+    const r = leerBeneficiario(form);
+    if (r.error) error = r.error;
+    else {
+      if (r.data!.rut) {
+        const { data: otros } = await supabase.from('beneficiarios').select('id,nombre,rut').neq('id', id);
+        const igual = (otros ?? []).find((b: any) => b.rut && limpiarRut(b.rut) === limpiarRut(r.data!.rut));
+        if (igual) error = `Otro registro ya usa ese RUT (${igual.nombre}).`;
+      }
+      if (!error) {
+        const { error: e } = await supabase.from('beneficiarios').update(r.data!).eq('id', id);
+        if (e) error = 'No se pudo guardar: ' + e.message;
+        else {
+          let extra = '';
+          if (['egresado', 'fallecido'].includes(r.data!.estado) && actual.estado !== r.data!.estado) {
+            await cerrarAsignaciones(supabase, id);
+            extra = ' Se cerraron sus acompañamientos vigentes.';
+          }
+          return back(aqui, 'ok', 'Cambios guardados.' + extra);
+        }
+      }
+    }
+  } else if (intent === 'eliminar') {
+    if (!isAdmin) return back(aqui, 'error', 'Solo administración puede eliminar registros.');
+    const { error: e } = await supabase.from('beneficiarios').delete().eq('id', id);
+    if (e) return back(aqui, 'error', 'No se pudo eliminar: ' + e.message);
+    return back('/ekr/beneficiarios', 'ok', 'Registro eliminado. La acción quedó en la auditoría.');
+  } else if (intent === 'asignar') {
+    const vol = str(form, 'voluntario_id');
+    if (!vol) return back(aqui, 'error', 'Elige un voluntario/a.');
+    if (actual.estado !== 'activo') return back(aqui, 'error', 'Solo se puede asignar acompañante a personas con estado Activo.');
+    const { error: e } = await supabase.from('asignaciones').insert({
+  voluntaria_id: vol,
+  beneficiario_id: id,
+  fecha_inicio: hoy(),
+});
+    if (e) return back(aqui, 'error', (e as any).code === '23505' ? 'Esa persona ya está asignada.' : 'No se pudo asignar: ' + e.message);
+    return back(aqui, 'ok', 'Acompañante asignado/a.');
+     } else if (intent === 'terminar') {
+    const aid = str(form, 'asignacion_id');
+    if (!aid) return back(aqui, 'error', 'Falta la asignación.');
+    const { error: e } = await supabase.from('asignaciones').update({ fecha_fin: hoy() }).eq('id', aid).eq('beneficiario_id', id);
+    if (e) return back(aqui, 'error', 'No se pudo finalizar: ' + e.message);
+    return back(aqui, 'ok', 'Acompañamiento finalizado.');
+  } else if (intent === 'crear-cuidador') {
+    const nombre = str(form, 'cuidador_nombre');
+    if (!nombre) return back(aqui, 'error', 'El nombre del cuidador es obligatorio.');
+    const { error: e } = await supabase.from('cuidadores').insert({
+      beneficiario_id: Number(id),
+      nombre,
+      rut: str(form, 'cuidador_rut'),
+      vinculo: str(form, 'cuidador_vinculo'),
+      genero: oneOf(str(form, 'cuidador_genero'), ['Mujer','Hombre','Otro'] as const),
+      telefono: str(form, 'cuidador_telefono'),
+    });
+    if (e) return back(aqui, 'error', 'No se pudo agregar el cuidador: ' + e.message);
+    return back(aqui, 'ok', 'Cuidador agregado.');
+
+  } else if (intent === 'editar-cuidador') {
+    const cuid = str(form, 'cuidador_id');
+    const nombre = str(form, 'cuidador_nombre');
+    if (!cuid || !nombre) return back(aqui, 'error', 'Datos incompletos.');
+    const { error: e } = await supabase.from('cuidadores').update({
+      nombre,
+      rut: str(form, 'cuidador_rut'),
+      vinculo: str(form, 'cuidador_vinculo'),
+      genero: oneOf(str(form, 'cuidador_genero'), ['Mujer','Hombre','Otro'] as const),
+      telefono: str(form, 'cuidador_telefono'),
+    }).eq('id', cuid).eq('beneficiario_id', id);
+    if (e) return back(aqui, 'error', 'No se pudo actualizar: ' + e.message);
+    return back(aqui, 'ok', 'Cuidador actualizado.');
+
+    } else if (intent === 'eliminar-cuidador') {
+    const cuid = str(form, 'cuidador_id');
+    if (!cuid) return back(aqui, 'error', 'Falta el cuidador.');
+    const { error: e } = await supabase.from('cuidadores').delete().eq('id', cuid).eq('beneficiario_id', id);
+    if (e) return back(aqui, 'error', 'No se pudo eliminar: ' + e.message);
+    return back(aqui, 'ok', 'Cuidador eliminado.');
+
+  } else if (intent === 'crear-bitacora') {
+    if (!['admin','coordinador'].includes(ctx.profile.rol)) {
+      return back(aqui, 'error', 'Solo coordinación puede agregar registros.');
+    }
+    const tipo = oneOf(str(form, 'bit_tipo'), TIPOS_BITACORA_KEYS);
+    const descripcion = str(form, 'bit_descripcion');
+    const fecha = str(form, 'bit_fecha');
+    if (!tipo) return back(aqui, 'error', 'Elige un tipo.');
+    if (!descripcion) return back(aqui, 'error', 'La descripción es obligatoria.');
+    if (!fecha) return back(aqui, 'error', 'La fecha es obligatoria.');
+
+    const { data: vigenteAsig } = await supabase
+      .from('asignaciones')
+      .select('voluntaria_id')
+      .eq('beneficiario_id', id)
+      .eq('activa', true)
+      .maybeSingle();
+
+    const { error: e } = await supabase.from('acciones').insert({
+      beneficiario_id: Number(id),
+      voluntaria_id: vigenteAsig?.voluntaria_id ?? ctx.profile.id,
+      registrado_por: ctx.profile.id,
+      tipo,
+      descripcion,
+      fecha,
+    });
+    if (e) return back(aqui, 'error', 'No se pudo guardar: ' + e.message);
+    return back(aqui, 'ok', 'Registro agregado a la bitácora.');
+
+  } else if (intent === 'editar-bitacora') {
+    if (!['admin','coordinador'].includes(ctx.profile.rol)) {
+      return back(aqui, 'error', 'Solo coordinación puede editar.');
+    }
+    const bid = str(form, 'bit_id');
+    const tipo = oneOf(str(form, 'bit_tipo'), TIPOS_BITACORA_KEYS);
+    const descripcion = str(form, 'bit_descripcion');
+    const fecha = str(form, 'bit_fecha');
+    if (!bid || !tipo || !descripcion || !fecha) return back(aqui, 'error', 'Datos incompletos.');
+    const { error: e } = await supabase.from('acciones').update({
+      tipo,
+      descripcion,
+      fecha,
+    }).eq('id', bid).eq('beneficiario_id', id);
+    if (e) return back(aqui, 'error', 'No se pudo actualizar: ' + e.message);
+    return back(aqui, 'ok', 'Registro actualizado.');
+
+  } else if (intent === 'eliminar-bitacora') {
+    if (ctx.profile.rol !== 'admin') {
+      return back(aqui, 'error', 'Solo administración puede eliminar registros.');
+    }
+    const bid = str(form, 'bit_id');
+    if (!bid) return back(aqui, 'error', 'Falta el registro.');
+    const { error: e } = await supabase.from('acciones').delete().eq('id', bid).eq('beneficiario_id', id);
+    if (e) return back(aqui, 'error', 'No se pudo eliminar: ' + e.message);
+    return back(aqui, 'ok', 'Registro eliminado.');
+  }
+}
+
+const [asig, prof, sol, aud, cuis, bit] = await Promise.all([
+  supabase.from('asignaciones').select('*').eq('beneficiario_id', id).order('fecha_inicio', { ascending: false }),
+  supabase.from('profiles').select('id,nombre,rol,activo'),
+  supabase.from('insumo_solicitudes').select('*, insumo_items(tipo, cantidad)').eq('beneficiario_id', id).order('created_at', { ascending: false }).limit(5),
+  isAdmin
+    ? supabase.from('auditoria').select('id,usuario_id,entidad,entidad_id,accion,created_at').eq('entidad', 'beneficiarios').eq('entidad_id', String(id)).order('created_at', { ascending: false }).limit(8)
+    : Promise.resolve({ data: [] as any[] }),
+  supabase.from('cuidadores').select('*').eq('beneficiario_id', id).order('nombre'),
+  supabase.from('acciones').select('*').eq('beneficiario_id', id).order('fecha', { ascending: false }).order('created_at', { ascending: false }),
+]);
+const cuidadores = cuis.data ?? [];
+const bitacora = bit.data ?? [];
+const profs = prof.data ?? [];
+const profById = porId<any>(profs);
+const vigentes = (asig.data ?? []).filter((a: any) => a.activa);
+const pasadas = (asig.data ?? []).filter((a: any) => !a.activa);
+const asignadosIds = new Set(vigentes.map((a: any) => a.voluntario_id));
+const disponibles = profs.filter((p: any) => p.rol === 'voluntario' && p.activo && !asignadosIds.has(p.id));
+const e = edad(actual.fecha_nacimiento);
+const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIARIO];
+---
+<EkrLayout title={actual.nombre} active="beneficiarios" ctx={ctx}>
+  <PageHeader title={actual.nombre} subtitle={[actual.rut, e !== null ? `${e} años` : null, actual.comuna].filter(Boolean).join(' · ')}>
+    <Badge tone={est?.tone ?? 'slate'} dot class="px-3! py-1! text-sm!">{est?.label ?? actual.estado}</Badge>
+    <a href="/ekr/beneficiarios" class="btn btn-ghost"><Icon name="chevron-left" size={16} /> Volver</a>
+  </PageHeader>
+
+  {error && <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep"><Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span></div>}
+
+  <div class="grid items-start gap-6 xl:grid-cols-3">
+    <div class="space-y-6 xl:col-span-2">
+      <form method="post" class="card p-6">
+        <input type="hidden" name="intent" value="guardar" />
+        <h2 class="mb-4 font-semibold text-ink">Ficha</h2>
+        <BeneficiarioForm v={values} />
+        <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
+          <p class="text-xs text-blue-slate">Registrado el {fmtDate(actual.created_at)}{actual.updated_at ? ` · actualizado ${hace(actual.updated_at)}` : ''}</p>
+          <button type="submit" class="btn btn-primary"><Icon name="check" size={18} /> Guardar cambios</button>
+        </div>
+      </form>
+      <!-- Bitácora de seguimiento -->
+      <section class="card" aria-labelledby="h-bit">
+        <div class="border-b border-line px-5 py-4">
+          <h2 id="h-bit" class="font-semibold text-ink">Bitácora de seguimiento</h2>
+          <p class="mt-0.5 text-xs text-blue-slate">Reportes mensuales y notas. Se pueden exportar.</p>
+        </div>
+
+        {bitacora.length === 0 ? (
+          <p class="px-5 py-4 text-sm text-blue-slate">Sin registros aún.</p>
+        ) : (
+          <ul class="divide-y divide-line">
+            {bitacora.map((r: any) => {
+              const t = TIPOS_BITACORA[r.tipo as keyof typeof TIPOS_BITACORA];
+              const reporta = profById.get(r.voluntaria_id)?.nombre;
+              const ingreso = profById.get(r.registrado_por)?.nombre;
+              return (
+                <li class="px-5 py-3 text-sm">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <Badge tone={t?.tone ?? 'slate'} dot>{t?.label ?? r.tipo}</Badge>
+                        <span class="text-xs text-blue-slate">{fmtDate(r.fecha)}</span>
+                      </div>
+                      <p class="mt-1.5 whitespace-pre-wrap text-ink">{r.descripcion}</p>
+                      <p class="mt-1 text-xs text-blue-slate">
+                        {reporta ? `Reporta: ${reporta}` : null}
+                        {reporta && ingreso ? ' · ' : null}
+                        {ingreso ? `Ingresó: ${ingreso}` : null}
+                      </p>
+                    </div>
+
+                    {['admin','coordinador'].includes(ctx.profile.rol) && (
+                      <details class="shrink-0">
+                        <summary class="cursor-pointer text-xs text-blue-slate hover:text-ink">Editar</summary>
+                        <form method="post" class="mt-2 w-80 space-y-2 rounded-lg border border-line bg-cream p-3">
+                          <input type="hidden" name="intent" value="editar-bitacora" />
+                          <input type="hidden" name="bit_id" value={r.id} />
+                          <div>
+                            <label class="label text-xs">Tipo</label>
+                            <select class="input input-sm" name="bit_tipo" required>
+                              {TIPOS_BITACORA_KEYS.map((k) => (
+                                <option value={k} selected={r.tipo === k}>{TIPOS_BITACORA[k].label}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label class="label text-xs">Fecha</label>
+                            <input class="input input-sm" type="date" name="bit_fecha" required value={r.fecha} />
+                          </div>
+                          <div>
+                            <label class="label text-xs">Descripción</label>
+                            <textarea class="input input-sm" name="bit_descripcion" rows="3" required>{r.descripcion}</textarea>
+                          </div>
+                          <div class="flex justify-between">
+                            <button type="submit" class="btn btn-primary btn-sm">Guardar</button>
+                            {ctx.profile.rol === 'admin' && (
+                              <button
+                                type="submit"
+                                name="intent"
+                                value="eliminar-bitacora"
+                                formnovalidate
+                                class="btn btn-danger btn-sm"
+                                onclick="return confirm('¿Eliminar este registro?')"
+                              >
+                                Eliminar
+                              </button>
+                            )}
+                          </div>
+                        </form>
+                      </details>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {['admin','coordinador'].includes(ctx.profile.rol) && (
+          <details class="border-t border-line px-5 py-3 text-sm">
+            <summary class="cursor-pointer font-medium text-blue-slate">
+              <Icon name="plus" size={14} class="inline" /> Agregar registro
+            </summary>
+            <form method="post" class="mt-3 grid gap-2 sm:grid-cols-2">
+              <input type="hidden" name="intent" value="crear-bitacora" />
+              <div>
+                <label class="label text-xs">Tipo *</label>
+                <select class="input input-sm" name="bit_tipo" required>
+                  {TIPOS_BITACORA_KEYS.map((k) => (
+                    <option value={k} selected={k === 'seguimiento'}>{TIPOS_BITACORA[k].label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label class="label text-xs">Fecha *</label>
+                <input class="input input-sm" type="date" name="bit_fecha" required value={hoy()} />
+              </div>
+              <div class="sm:col-span-2">
+                <label class="label text-xs">Descripción *</label>
+                <textarea
+                  class="input input-sm"
+                  name="bit_descripcion"
+                  rows="4"
+                  required
+                  placeholder="¿Cómo avanza el acompañamiento este mes? Visitas, cambios de estado, gestiones…"
+                ></textarea>
+              </div>
+              <div class="sm:col-span-2 mt-1">
+                <button class="btn btn-primary btn-sm w-full" type="submit">
+                  <Icon name="plus" size={14} /> Guardar registro
+                </button>
+              </div>
+            </form>
+          </details>
+        )}
+      </section>
+
+      {isAdmin && (
+        <section class="card border-salmon/30 p-6">
+          <h2 class="font-semibold text-salmon-deep">Zona delicada</h2>
+          <p class="mt-1 text-sm text-blue-slate">Eliminar borra la ficha y sus asignaciones de forma permanente. Si la persona ya no participa, es mejor cambiar su estado a <strong>Egresado</strong> o <strong>Fallecido</strong>.</p>
+          <form method="post" data-confirm={`¿Eliminar definitivamente a ${actual.nombre}? Esta acción no se puede deshacer.`} class="mt-4">
+            <input type="hidden" name="intent" value="eliminar" />
+            <button type="submit" class="btn btn-danger"><Icon name="trash-2" size={16} /> Eliminar registro</button>
+          </form>
+        </section>
+      )}
+    </div>
+      <!-- Observaciones -->
+      <section class="card" aria-labelledby="h-obs">
+        <div class="border-b border-line px-5 py-4">
+          <h2 id="h-obs" class="font-semibold text-ink">Observaciones</h2>
+          <p class="mt-0.5 text-xs text-blue-slate">Notas generales de cabecera (editables en la ficha).</p>
+        </div>
+
+        <div class="space-y-4 p-5 text-sm">
+          <div>
+            <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-slate">Del derivador</p>
+            {actual.observaciones_derivador ? (
+              <p class="whitespace-pre-wrap rounded-lg bg-cream px-3 py-2 text-ink">{actual.observaciones_derivador}</p>
+            ) : (
+              <p class="text-blue-slate/60">Sin observaciones del derivador.</p>
+            )}
+          </div>
+
+          <div>
+            <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-slate">De la voluntaria</p>
+            {actual.observaciones_voluntaria ? (
+              <p class="whitespace-pre-wrap rounded-lg bg-cream px-3 py-2 text-ink">{actual.observaciones_voluntaria}</p>
+            ) : (
+              <p class="text-blue-slate/60">Sin observaciones de la voluntaria.</p>
+            )}
+          </div>
+        </div>
+      </section>
+    <div class="space-y-6">
+      <!-- Acompañamiento -->
+      <section class="card" aria-labelledby="h-acomp">
+        <div class="border-b border-line px-5 py-4"><h2 id="h-acomp" class="font-semibold text-ink">Acompañamiento</h2></div>
+        {vigentes.length === 0 ? (
+          <p class="px-5 py-4 text-sm text-blue-slate">{actual.estado === 'activo' ? 'Aún no tiene voluntario/a asignado/a.' : 'Sin acompañante vigente.'}</p>
+        ) : (
+          <ul class="divide-y divide-line">
+            {vigentes.map((a: any) => (
+  <li class="flex items-center gap-3 px-5 py-3 text-sm">
+    <Avatar nombre={profById.get(a.voluntaria_id)?.nombre} />
+    <div class="min-w-0 flex-1">
+      <p class="truncate font-medium text-ink">
+        {profById.get(a.voluntaria_id)?.nombre ?? '—'}
+      </p>
+      <p class="text-xs text-blue-slate">
+        Desde {fmtDate(a.fecha_inicio)}
+        {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
+      </p>
+    </div>
+    <form method="post" data-confirm="¿Finalizar este acompañamiento?">
+      <input type="hidden" name="intent" value="terminar" />
+      <input type="hidden" name="asignacion_id" value={a.id} />
+      <button class="btn btn-ghost btn-sm" type="submit">Finalizar</button>
+    </form>
+  </li>
+))}
+          </ul>
+        )}
+        {actual.estado === 'activo' && (
+          disponibles.length ? (
+            <form method="post" class="space-y-2 border-t border-line p-5">
+              <input type="hidden" name="intent" value="asignar" />
+              <label class="label" for="voluntario_id">Asignar voluntario/a</label>
+              <select class="input" id="voluntario_id" name="voluntario_id" required>
+                <option value="">Elegir…</option>
+                {disponibles.map((p: any) => <option value={p.id}>{p.nombre}</option>)}
+              </select>
+              <input class="input" name="notas" placeholder="Nota (opcional): ej. visita los martes" maxlength="200" />
+              <button class="btn btn-primary w-full" type="submit"><Icon name="heart-handshake" size={16} /> Asignar</button>
+            </form>
+          ) : (
+            <p class="border-t border-line px-5 py-4 text-sm text-blue-slate">No hay más voluntarios/as disponibles. Agrégalos en <a class="link" href="/ekr/asignaciones">Asignaciones</a>.</p>
+          )
+        )}
+        {pasadas.length > 0 && (
+          <details class="border-t border-line px-5 py-3 text-sm">
+            <summary class="cursor-pointer font-medium text-blue-slate">Historial ({pasadas.length})</summary>
+            <ul class="mt-2 space-y-1.5 text-blue-slate">
+              {pasadas.map((a: any) => (
+                <li>
+                  {profById.get(a.voluntaria_id)?.nombre ?? '—'} · {fmtDate(a.fecha_inicio)} → {fmtDate(a.fecha_fin)}
+          {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
+  </li>
+))}
+            </ul>
+          </details>
+        )}
+      </section>
+      <!-- Cuidadores -->
+      <section class="card" aria-labelledby="h-cuid">
+        <div class="border-b border-line px-5 py-4">
+          <h2 id="h-cuid" class="font-semibold text-ink">Cuidadores</h2>
+        </div>
+
+        {cuidadores.length === 0 ? (
+          <p class="px-5 py-4 text-sm text-blue-slate">Sin cuidadores registrados.</p>
+        ) : (
+          <ul class="divide-y divide-line">
+            {cuidadores.map((c: any) => (
+              <li class="px-5 py-3">
+                <details>
+                  <summary class="flex cursor-pointer items-center justify-between gap-2">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-ink">{c.nombre}</p>
+                      <p class="text-xs text-blue-slate">
+                        {[c.vinculo, c.rut, c.telefono].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
+                      </p>
+                    </div>
+                    <Icon name="chevron-down" size={16} class="shrink-0 text-blue-slate" />
+                  </summary>
+
+                  <form method="post" class="mt-3 grid gap-2 sm:grid-cols-2">
+                    <input type="hidden" name="intent" value="editar-cuidador" />
+                    <input type="hidden" name="cuidador_id" value={c.id} />
+
+                    <div class="sm:col-span-2">
+                      <label class="label text-xs">Nombre *</label>
+                      <input class="input input-sm" name="cuidador_nombre" required value={c.nombre} />
+                    </div>
+                    <div>
+                      <label class="label text-xs">RUT</label>
+                      <input class="input input-sm" name="cuidador_rut" value={c.rut ?? ''} />
+                    </div>
+                    <div>
+                      <label class="label text-xs">Vínculo</label>
+                      <input class="input input-sm" name="cuidador_vinculo" value={c.vinculo ?? ''} placeholder="hija, esposo…" />
+                    </div>
+                    <div>
+                      <label class="label text-xs">Género</label>
+                      <select class="input input-sm" name="cuidador_genero">
+                        <option value="">—</option>
+                        <option value="Mujer" selected={c.genero === 'Mujer'}>Mujer</option>
+                        <option value="Hombre" selected={c.genero === 'Hombre'}>Hombre</option>
+                        <option value="Otro" selected={c.genero === 'Otro'}>Otro</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="label text-xs">Teléfono</label>
+                      <input class="input input-sm" name="cuidador_telefono" value={c.telefono ?? ''} />
+                    </div>
+
+                    <div class="sm:col-span-2 mt-1 flex justify-between gap-2">
+                      <button class="btn btn-primary btn-sm" type="submit">Guardar</button>
+                      <button
+                        class="btn btn-danger btn-sm"
+                        type="submit"
+                        name="intent"
+                        value="eliminar-cuidador"
+                        formnovalidate
+                        onclick={`return confirm('¿Eliminar a ${c.nombre.replace(/'/g, "\\'")}?')`}
+                      >
+                        <Icon name="trash-2" size={14} /> Eliminar
+                      </button>
+                    </div>
+                  </form>
+                </details>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <details class="border-t border-line px-5 py-3 text-sm">
+          <summary class="cursor-pointer font-medium text-blue-slate">
+            <Icon name="plus" size={14} class="inline" /> Agregar cuidador
+          </summary>
+          <form method="post" class="mt-3 grid gap-2 sm:grid-cols-2">
+            <input type="hidden" name="intent" value="crear-cuidador" />
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Nombre *</label>
+              <input class="input input-sm" name="cuidador_nombre" required placeholder="Ej.: María Pérez" />
+            </div>
+            <div>
+              <label class="label text-xs">RUT</label>
+              <input class="input input-sm" name="cuidador_rut" placeholder="12.345.678-9" />
+            </div>
+            <div>
+              <label class="label text-xs">Vínculo</label>
+              <input class="input input-sm" name="cuidador_vinculo" placeholder="hija, esposo…" />
+            </div>
+            <div>
+              <label class="label text-xs">Género</label>
+              <select class="input input-sm" name="cuidador_genero">
+                <option value="">—</option>
+                <option value="Mujer">Mujer</option>
+                <option value="Hombre">Hombre</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">Teléfono</label>
+              <input class="input input-sm" name="cuidador_telefono" />
+            </div>
+            <div class="sm:col-span-2 mt-1">
+              <button class="btn btn-primary btn-sm w-full" type="submit">
+                <Icon name="plus" size={14} /> Agregar
+              </button>
+            </div>
+          </form>
+        </details>
+      </section>
+
+            <!-- Solicitudes -->
+      <section class="card" aria-labelledby="h-sol">
+        <div class="flex items-center justify-between border-b border-line px-5 py-4">
+          <h2 id="h-sol" class="font-semibold text-ink">Solicitudes de insumos</h2>
+          <a href="/ekr/solicitudes" class="link text-sm">Ver todas</a>
+        </div>
+        {(sol.data ?? []).length === 0 ? (
+          <p class="px-5 py-4 text-sm text-blue-slate">Sin solicitudes.</p>
+        ) : (
+          <ul class="divide-y divide-line">
+            {(sol.data ?? []).map((s: any) => (
+              <li class="flex items-center gap-3 px-5 py-3 text-sm">
+                <div class="min-w-0 flex-1">
+                  <p class="truncate font-medium text-ink">
+                    {s.insumo_items?.length
+                      ? s.insumo_items.map((i: any) => `${i.tipo} × ${i.cantidad}`).join(', ')
+                      : 'Sin ítems'}
+                  </p>
+                  <p class="text-xs text-blue-slate">{fmtDate(s.fecha_solicitud)}</p>
+                </div>
+                <Badge tone={ESTADOS_SOLICITUD[s.estado as keyof typeof ESTADOS_SOLICITUD]?.tone ?? 'slate'}>
+                  {ESTADOS_SOLICITUD[s.estado as keyof typeof ESTADOS_SOLICITUD]?.label ?? s.estado}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {isAdmin && (
+        <section class="card" aria-labelledby="h-hist">
+          <div class="border-b border-line px-5 py-4"><h2 id="h-hist" class="font-semibold text-ink">Historial de cambios</h2></div>
+          {(aud.data ?? []).length === 0 ? <p class="px-5 py-4 text-sm text-blue-slate">Sin cambios registrados.</p> : (
+            <ul class="divide-y divide-line">
+              {(aud.data ?? []).map((a: any) => (
+                <li class="px-5 py-3 text-sm">
+                  <div class="flex items-center justify-between gap-2">
+                    <Badge tone={ACCION_AUDITORIA[a.accion]?.tone ?? 'slate'}>
+                       {ACCION_AUDITORIA[a.accion]?.label ?? a.accion}
+                    </Badge>
+                    <span class="text-xs text-blue-slate/80">{fmtDateTime(a.created_at)}</span>
+                 </div>
+                 <p class="mt-1 truncate text-xs text-blue-slate">
+                   {a.entidad} #{a.entidad_id}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
+  </div>
+</EkrLayout>

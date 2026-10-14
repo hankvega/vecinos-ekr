@@ -1,0 +1,20 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Icon from '../../components/Icon.astro';
+---
+<BaseLayout title="Sin acceso">
+  <main class="grid min-h-screen place-items-center bg-cream px-4">
+    <div class="card max-w-md p-8 text-center">
+      <span class="mx-auto grid size-12 place-items-center rounded-2xl bg-salmon/15 text-salmon-deep"><Icon name="lock" size={22} /></span>
+      <h1 class="mt-4 text-xl font-bold text-ink">Tu cuenta aún no tiene acceso al panel</h1>
+      <p class="mt-2 text-sm text-blue-slate">
+        Iniciaste sesión correctamente, pero tu usuario no está registrado como administración o coordinación.
+        Pide a quien administra el sistema que active tu perfil.
+      </p>
+      <div class="mt-6 flex justify-center gap-2">
+        <a href="/api/auth/logout" class="btn btn-ghost">Cerrar sesión</a>
+        <a href="/ekr" class="btn btn-primary">Reintentar</a>
+      </div>
+    </div>
+  </main>
+</BaseLayout>

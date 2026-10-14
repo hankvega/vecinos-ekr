@@ -1,0 +1,161 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const error = Astro.url.searchParams.get('error');
+---
+
+<BaseLayout title="Iniciar Sesión">
+  <div class="login-container">
+    <div class="login-card">
+      <div class="logo-area">
+        <h1>🤝 Vecinos que Acompañan</h1>
+        <p class="subtitle">con compasión</p>
+      </div>
+
+      {error && <div class="alert alert-error">Error: {error}</div>}
+      <div id="msg" class="alert" hidden></div>
+
+      <form id="login-form" class="login-form">
+        <label for="email">Correo electrónico</label>
+        <input type="email" id="email" name="email" placeholder="funcionaria@ejemplo.cl" required />
+        <button type="submit" id="submit-btn">Enviar código de acceso</button>
+      </form>
+
+      <form id="code-form" class="login-form" hidden>
+        <label for="code">Código de acceso</label>
+        <input type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="8" placeholder="12345678" required />
+        <button type="submit" id="verify-btn">Ingresar</button>
+        <button type="button" id="back-btn" class="link-btn">Usar otro correo</button>
+      </form>
+
+      <p class="help-text">
+        Te enviaremos un código por correo. No necesitas contraseña.
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('login-form') as HTMLFormElement;
+    const codeForm = document.getElementById('code-form') as HTMLFormElement;
+    const msg = document.getElementById('msg') as HTMLDivElement;
+    const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
+    const verifyBtn = document.getElementById('verify-btn') as HTMLButtonElement;
+    let currentEmail = '';
+
+    const show = (text: string, kind: 'error' | 'success') => {
+      msg.textContent = text;
+      msg.className = `alert alert-${kind}`;
+      msg.hidden = false;
+    };
+
+    async function post(url: string, body: object) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok, data };
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Enviando...';
+      currentEmail = (document.getElementById('email') as HTMLInputElement).value.trim();
+      try {
+        const { ok, data } = await post('/api/auth/login', { email: currentEmail });
+        if (ok) {
+          loginForm.hidden = true;
+          codeForm.hidden = false;
+          show('Te enviamos un código por correo ✨', 'success');
+          (document.getElementById('code') as HTMLInputElement).focus();
+        } else {
+          show(data.error || 'Error desconocido', 'error');
+        }
+      } catch {
+        show('Error de conexión', 'error');
+      }
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Enviar código de acceso';
+    });
+
+    codeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      verifyBtn.disabled = true;
+      verifyBtn.textContent = 'Verificando...';
+      const token = (document.getElementById('code') as HTMLInputElement).value.trim();
+      try {
+        const { ok, data } = await post('/api/auth/verify', { email: currentEmail, token });
+        if (ok) {
+          window.location.href = '/ekr';
+          return;
+        }
+        show(data.error || 'Código inválido', 'error');
+      } catch {
+        show('Error de conexión', 'error');
+      }
+      verifyBtn.disabled = false;
+      verifyBtn.textContent = 'Ingresar';
+    });
+
+    document.getElementById('back-btn')!.addEventListener('click', () => {
+      codeForm.hidden = true;
+      loginForm.hidden = false;
+      msg.hidden = true;
+    });
+  </script>
+
+  <style>
+    .login-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+      background: linear-gradient(135deg, #f8f6f5 0%, #f0e8e4 100%);
+    }
+    .login-card {
+      background: white;
+      border-radius: 16px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 4px 24px rgba(94, 104, 111, 0.1);
+    }
+    .logo-area { text-align: center; margin-bottom: 2rem; }
+    .logo-area h1 { color: var(--blue-slate); font-size: 1.5rem; font-weight: 700; }
+    .subtitle { color: var(--dusty-rose); font-size: 0.9rem; margin-top: 0.25rem; }
+    .login-form { display: flex; flex-direction: column; gap: 1rem; }
+    label { font-size: 0.85rem; font-weight: 600; color: var(--blue-slate); }
+    input {
+      padding: 0.75rem 1rem;
+      border: 2px solid #e5e1df;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+    input:focus { outline: none; border-color: var(--dusty-rose); }
+    button {
+      padding: 0.75rem;
+      background: var(--salmon);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #e8635b; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .link-btn { background: transparent; color: var(--blue-slate); font-weight: 500; font-size: 0.85rem; }
+    .link-btn:hover { background: transparent; text-decoration: underline; }
+    [hidden] { display: none !important; }
+    .help-text { text-align: center; font-size: 0.8rem; color: var(--rosy-taupe); margin-top: 1.5rem; }
+    .alert { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; }
+    .alert-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .alert-success { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+  </style>
+</BaseLayout>

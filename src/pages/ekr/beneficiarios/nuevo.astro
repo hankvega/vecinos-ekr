@@ -1,0 +1,53 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import BeneficiarioForm from '../../../components/BeneficiarioForm.astro';
+import Icon from '../../../components/Icon.astro';
+import { getEkrContext, back, leerBeneficiario, ESTADOS_BENEFICIARIO_KEYS, hoy, limpiarRut } from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase } = ctx;
+
+const pedido = Astro.url.searchParams.get('estado');
+let values: Record<string, any> = {
+  estado: (ESTADOS_BENEFICIARIO_KEYS as string[]).includes(pedido ?? '') ? pedido : 'lista_espera',
+  fecha_ingreso: hoy(),
+};
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  values = Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === 'string'));
+  const r = leerBeneficiario(form);
+  if (r.error) {
+    error = r.error;
+  } else {
+    if (r.data!.rut) {
+      const { data: existentes } = await supabase.from('beneficiarios').select('id,nombre,rut');
+      const igual = (existentes ?? []).find((b: any) => b.rut && limpiarRut(b.rut) === limpiarRut(r.data!.rut));
+      if (igual) error = `Ya existe un registro con ese RUT (${igual.nombre}).`;
+    }
+    if (!error) {
+      const { data, error: e } = await supabase.from('beneficiarios').insert(r.data!).select('id').single();
+      if (e || !data) error = 'No se pudo guardar: ' + (e?.message ?? 'error desconocido');
+      else return back(`/ekr/beneficiarios/${data.id}`, 'ok', 'Beneficiario registrado correctamente.');
+    }
+  }
+}
+---
+<EkrLayout title="Nuevo beneficiario" active="beneficiarios" ctx={ctx}>
+  <PageHeader title="Nuevo beneficiario" subtitle="Registra a una persona nueva en el programa o en la lista de espera.">
+    <a href="/ekr/beneficiarios" class="btn btn-ghost"><Icon name="chevron-left" size={16} /> Volver</a>
+  </PageHeader>
+
+  {error && <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep"><Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span></div>}
+
+  <form method="post" class="card max-w-3xl p-6">
+    <BeneficiarioForm v={values} />
+    <div class="mt-6 flex justify-end gap-2 border-t border-line pt-5">
+      <a href="/ekr/beneficiarios" class="btn btn-ghost">Cancelar</a>
+      <button type="submit" class="btn btn-primary"><Icon name="check" size={18} /> Registrar</button>
+    </div>
+  </form>
+</EkrLayout>

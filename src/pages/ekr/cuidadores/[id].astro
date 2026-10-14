@@ -1,0 +1,136 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Icon from '../../../components/Icon.astro';
+import Badge from '../../../components/Badge.astro';
+import {
+  getEkrContext, back, str, oneOf,
+} from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase, isAdmin } = ctx;
+const id = Astro.params.id!;
+const aqui = `/ekr/cuidadores/${id}`;
+
+const { data: cuidador } = await supabase.from('cuidadores').select('*').eq('id', id).maybeSingle();
+if (!cuidador) return back('/ekr/cuidadores', 'error', 'No se encontró ese cuidador.');
+
+const { data: benef } = await supabase
+  .from('beneficiarios')
+  .select('id,nombre,rut,estado')
+  .eq('id', cuidador.beneficiario_id)
+  .maybeSingle();
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = str(form, 'intent');
+
+  if (intent === 'guardar') {
+    const nombre = str(form, 'nombre');
+    if (!nombre) return back(aqui, 'error', 'El nombre es obligatorio.');
+    const { error: e } = await supabase.from('cuidadores').update({
+      nombre,
+      rut: str(form, 'rut'),
+      vinculo: str(form, 'vinculo'),
+      genero: oneOf(str(form, 'genero'), ['Mujer','Hombre','Otro'] as const),
+      telefono: str(form, 'telefono'),
+    }).eq('id', id);
+    if (e) return back(aqui, 'error', 'No se pudo guardar: ' + e.message);
+    return back(aqui, 'ok', 'Cambios guardados.');
+
+  } else if (intent === 'eliminar') {
+    if (!isAdmin) return back(aqui, 'error', 'Solo administración puede eliminar cuidadores.');
+    const { error: e } = await supabase.from('cuidadores').delete().eq('id', id);
+    if (e) return back(aqui, 'error', 'No se pudo eliminar: ' + e.message);
+    return back(`/ekr/beneficiarios/${cuidador.beneficiario_id}`, 'ok', 'Cuidador eliminado.');
+  }
+}
+---
+
+<EkrLayout title={cuidador.nombre} active="cuidadores" ctx={ctx}>
+  <PageHeader title={cuidador.nombre} subtitle={cuidador.vinculo ?? 'Cuidador/a'}>
+    {benef && <a href={`/ekr/beneficiarios/${benef.id}`} class="btn btn-ghost"><Icon name="users" size={16} /> {benef.nombre}</a>}
+    <a href="/ekr/cuidadores" class="btn btn-ghost"><Icon name="chevron-left" size={16} /> Volver</a>
+  </PageHeader>
+
+  {error && <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep"><Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span></div>}
+
+  <div class="grid items-start gap-6 xl:grid-cols-3">
+    <div class="xl:col-span-2">
+      <form method="post" class="card p-6">
+        <input type="hidden" name="intent" value="guardar" />
+        <h2 class="mb-4 font-semibold text-ink">Datos del cuidador/a</h2>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="label" for="nombre">Nombre completo *</label>
+            <input class="input" id="nombre" name="nombre" required value={cuidador.nombre} />
+          </div>
+          <div>
+            <label class="label" for="rut">RUT</label>
+            <input class="input" id="rut" name="rut" value={cuidador.rut ?? ''} />
+          </div>
+          <div>
+            <label class="label" for="vinculo">Vínculo</label>
+            <input class="input" id="vinculo" name="vinculo" value={cuidador.vinculo ?? ''} placeholder="hija, esposo…" />
+          </div>
+          <div>
+            <label class="label" for="genero">Género</label>
+            <select class="input" id="genero" name="genero">
+              <option value="">—</option>
+              <option value="Mujer" selected={cuidador.genero === 'Mujer'}>Mujer</option>
+              <option value="Hombre" selected={cuidador.genero === 'Hombre'}>Hombre</option>
+              <option value="Otro" selected={cuidador.genero === 'Otro'}>Otro</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="telefono">Teléfono</label>
+            <input class="input" type="tel" id="telefono" name="telefono" value={cuidador.telefono ?? ''} />
+          </div>
+        </div>
+
+        <div class="mt-6 flex justify-end border-t border-line pt-5">
+          <button type="submit" class="btn btn-primary"><Icon name="check" size={18} /> Guardar cambios</button>
+        </div>
+      </form>
+
+      {isAdmin && (
+        <section class="card mt-6 border-salmon/30 p-6">
+          <h2 class="font-semibold text-salmon-deep">Zona delicada</h2>
+          <p class="mt-1 text-sm text-blue-slate">Eliminar quita este cuidador de la ficha del beneficiario.</p>
+          <form method="post" class="mt-4" data-confirm={`¿Eliminar a ${cuidador.nombre}?`}>
+            <input type="hidden" name="intent" value="eliminar" />
+            <button type="submit" class="btn btn-danger"><Icon name="trash-2" size={16} /> Eliminar cuidador</button>
+          </form>
+        </section>
+      )}
+    </div>
+
+    <div class="space-y-6">
+      <section class="card" aria-labelledby="h-benef">
+        <div class="border-b border-line px-5 py-4">
+          <h2 id="h-benef" class="font-semibold text-ink">Beneficiario asociado</h2>
+        </div>
+        {benef ? (
+          <div class="px-5 py-4">
+            <p class="font-medium text-ink">{benef.nombre}</p>
+            <p class="text-xs text-blue-slate">{benef.rut ?? 'Sin RUT'}</p>
+            <Badge tone={benef.estado === 'activo' ? 'green' : 'slate'} dot class="mt-2">
+              {benef.estado}
+            </Badge>
+            <div class="mt-3">
+              <a class="btn btn-ghost btn-sm" href={`/ekr/beneficiarios/${benef.id}`}>
+                Ver ficha del beneficiario <Icon name="chevron-right" size={14} />
+              </a>
+            </div>
+          </div>
+        ) : (
+          <p class="px-5 py-4 text-sm text-blue-slate">Beneficiario no encontrado.</p>
+        )}
+      </section>
+    </div>
+  </div>
+</EkrLayout>

@@ -1,0 +1,128 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import Icon from '../components/Icon.astro';
+import Avatar from '../components/Avatar.astro';
+import Flash from '../components/Flash.astro';
+import { ROL_LABEL, type EkrCtx } from '../lib/ekr';
+
+interface Props {
+  title: string;
+  active: string;
+  ctx: EkrCtx;
+}
+const { title, active, ctx } = Astro.props;
+const { profile, isAdmin, badges } = ctx;
+
+const nav = [
+  { key: 'dashboard', label: 'Resumen', href: '/ekr', icon: 'layout-dashboard' },
+  { key: 'beneficiarios', label: 'Beneficiarios', href: '/ekr/beneficiarios', icon: 'users' },
+  { key: 'voluntarios', label: 'Voluntarios', href: '/ekr/voluntarios', icon: 'heart-handshake' },
+  { key: 'cuidadores', label: 'Cuidadores', href: '/ekr/cuidadores', icon: 'users' },
+  { key: 'espera', label: 'Lista de espera', href: '/ekr/espera', icon: 'hourglass' },
+  { key: 'asignaciones', label: 'Asignaciones', href: '/ekr/asignaciones', icon: 'heart-handshake' },
+  { key: 'solicitudes', label: 'Solicitudes de insumos', href: '/ekr/solicitudes', icon: 'package', badge: badges.solicitudes },
+  { key: 'mensajes', label: 'Mensajes y urgencias', href: '/ekr/mensajes', icon: 'siren', badge: badges.urgencias, alert: true },
+  { key: 'reportes', label: 'Reportes', href: '/ekr/reportes', icon: 'chart-column' },
+  ...(isAdmin ? [{ key: 'auditoria', label: 'Auditoría', href: '/ekr/auditoria', icon: 'shield-check' }] : []),
+];
+---
+<BaseLayout title={title}>
+  <a href="#contenido" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-white focus:px-3 focus:py-2">Saltar al contenido</a>
+
+  <!-- Barra superior móvil -->
+  <div class="sticky top-0 z-30 flex items-center justify-between border-b border-line bg-white/95 px-4 py-3 backdrop-blur lg:hidden print:hidden">
+    <a href="/ekr" class="flex items-center gap-2.5">
+      <img src="/logo.png" alt="" width="36" height="36" class="size-9 rounded-full" />
+      <span class="text-sm font-bold text-ink">Vecinos que Acompañan</span>
+    </a>
+    <button id="menu-btn" type="button" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar" class="grid size-10 place-items-center rounded-lg text-blue-slate hover:bg-cream">
+      <Icon name="menu" />
+    </button>
+  </div>
+
+  <div id="overlay" class="fixed inset-0 z-30 hidden bg-ink/40 lg:hidden print:hidden"></div>
+
+  <div class="lg:grid lg:min-h-screen lg:grid-cols-[17.5rem_1fr]">
+    <aside
+      id="sidebar"
+      class="fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col border-r border-line bg-white transition-transform duration-200 data-[open=true]:translate-x-0 lg:sticky lg:top-0 lg:h-screen lg:w-auto lg:translate-x-0 print:hidden"
+    >
+      <div class="flex items-center gap-3 px-5 pt-6 pb-5">
+        <img src="/logo.png" alt="Fundación Elisabeth Kübler-Ross Chile" width="52" height="52" class="size-[52px] rounded-full ring-1 ring-line" />
+        <div class="leading-tight">
+          <p class="text-[15px] font-bold text-ink">Vecinos que<br />Acompañan</p>
+          <p class="mt-0.5 text-xs text-dusty-rose">con compasión</p>
+        </div>
+      </div>
+
+      <nav aria-label="Principal" class="flex-1 space-y-0.5 overflow-y-auto px-3 pb-4">
+        {nav.map((i) => (
+          <a
+            href={i.href}
+            aria-current={active === i.key ? 'page' : undefined}
+            class:list={[
+              'group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+              active === i.key
+                ? 'bg-rosy-taupe/20 text-ink'
+                : 'text-blue-slate hover:bg-cream hover:text-ink',
+            ]}
+          >
+            {active === i.key && <span class="absolute inset-y-2 -left-3 w-1 rounded-r-full bg-salmon"></span>}
+            <Icon name={i.icon} size={19} class={active === i.key ? 'text-rose-deep' : 'text-blue-slate/70 group-hover:text-rose-deep'} />
+            <span class="flex-1">{i.label}</span>
+            {typeof i.badge === 'number' && i.badge > 0 && (
+              <span
+                class:list={[
+                  'min-w-5 rounded-full px-1.5 py-0.5 text-center text-[11px] font-bold tabular-nums',
+                  i.alert ? 'bg-salmon text-ink' : 'bg-blue-slate/10 text-blue-slate',
+                ]}
+                aria-label={`${i.badge} pendientes`}
+              >{i.badge}</span>
+            )}
+          </a>
+        ))}
+      </nav>
+
+      <div class="border-t border-line p-4">
+        <div class="flex items-center gap-3">
+          <Avatar nombre={profile.nombre} />
+          <div class="min-w-0 flex-1 leading-tight">
+            <p class="truncate text-sm font-semibold text-ink">{profile.nombre}</p>
+            <p class="truncate text-xs text-blue-slate">{ROL_LABEL[profile.rol]}</p>
+          </div>
+          <a href="/api/auth/logout" title="Cerrar sesión" aria-label="Cerrar sesión" class="grid size-9 place-items-center rounded-lg text-blue-slate hover:bg-cream hover:text-salmon-deep">
+            <Icon name="log-out" size={18} />
+          </a>
+        </div>
+      </div>
+    </aside>
+
+    <main id="contenido" class="min-w-0 px-4 py-6 sm:px-8 lg:py-9 print:p-0">
+      <div class="mx-auto max-w-[1280px]">
+        <Flash />
+        <slot />
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('overlay');
+    const btn = document.getElementById('menu-btn');
+    function setOpen(open: boolean) {
+      sidebar?.setAttribute('data-open', String(open));
+      overlay?.classList.toggle('hidden', !open);
+      btn?.setAttribute('aria-expanded', String(open));
+    }
+    btn?.addEventListener('click', () => setOpen(sidebar?.getAttribute('data-open') !== 'true'));
+    overlay?.addEventListener('click', () => setOpen(false));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+
+    // Confirmación para acciones delicadas: <form data-confirm="¿Seguro?">
+    document.addEventListener('submit', (e) => {
+      const form = e.target as HTMLFormElement;
+      const msg = form?.dataset?.confirm;
+      if (msg && !window.confirm(msg)) e.preventDefault();
+    });
+  </script>
+</BaseLayout>

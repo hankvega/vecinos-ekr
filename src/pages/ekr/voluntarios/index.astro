@@ -1,0 +1,156 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Badge from '../../../components/Badge.astro';
+import Empty from '../../../components/Empty.astro';
+import { getEkrContext, firstError, porId } from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase } = ctx;
+
+const q = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase();
+const estado = Astro.url.searchParams.get('estado') ?? ''; // activo | inactivo | con | sin
+const orden = Astro.url.searchParams.get('orden') ?? 'nombre'; // nombre | asignaciones
+
+const [prof, asig, ben] = await Promise.all([
+  supabase.from('profiles').select('*').eq('rol', 'voluntario'),
+  supabase.from('asignaciones').select('*').eq('activa', true),
+  supabase.from('beneficiarios').select('id,nombre,estado'),
+]);
+const loadError = firstError(prof, asig, ben);
+const voluntarios = prof.data ?? [];
+const asignaciones = asig.data ?? [];
+const benefById = porId<any>(ben.data ?? []);
+
+const asignPorVol = new Map<string, number>();
+const beneficiariosPorVol = new Map<string, any[]>();
+for (const a of asignaciones) {
+  asignPorVol.set(a.voluntaria_id, (asignPorVol.get(a.voluntaria_id) ?? 0) + 1);
+  const b = benefById.get(a.beneficiario_id);
+  if (b) {
+    const arr = beneficiariosPorVol.get(a.voluntaria_id) ?? [];
+    arr.push(b);
+    beneficiariosPorVol.set(a.voluntaria_id, arr);
+  }
+}
+
+let lista = voluntarios.filter((v: any) => {
+  if (q && !v.nombre.toLowerCase().includes(q) && !(v.email ?? '').toLowerCase().includes(q)) return false;
+  if (estado === 'activo' && !v.activo) return false;
+  if (estado === 'inactivo' && v.activo) return false;
+  const n = asignPorVol.get(v.id) ?? 0;
+  if (estado === 'con' && n === 0) return false;
+  if (estado === 'sin' && n > 0) return false;
+  return true;
+});
+
+if (orden === 'asignaciones') {
+  lista = lista.sort((a: any, b: any) => (asignPorVol.get(b.id) ?? 0) - (asignPorVol.get(a.id) ?? 0));
+} else {
+  lista = lista.sort((a: any, b: any) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+const totalActivos = voluntarios.filter((v: any) => v.activo).length;
+const totalConAsignacion = new Set(asignaciones.map((a: any) => a.voluntaria_id)).size;
+const totalSinAsignacion = totalActivos - totalConAsignacion;
+---
+
+<EkrLayout title="Voluntarios" active="voluntarios" ctx={ctx}>
+  <PageHeader title="Voluntarios" subtitle="Equipo de voluntariado: sus datos y cuántos acompañamientos tienen activos." />
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+
+  <div class="mb-4 grid gap-3 sm:grid-cols-3">
+    <div class="card p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-blue-slate">Total activos</p>
+      <p class="mt-1 text-2xl font-bold text-ink">{totalActivos}</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-blue-slate">Con acompañamiento</p>
+      <p class="mt-1 text-2xl font-bold text-ink">{totalConAsignacion}</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-blue-slate">Sin acompañamiento</p>
+      <p class="mt-1 text-2xl font-bold text-ink">{totalSinAsignacion}</p>
+    </div>
+  </div>
+
+  <form method="get" class="card mb-4 flex flex-wrap items-end gap-3 p-4">
+    <div class="min-w-52 flex-1">
+      <label class="label" for="q">Buscar</label>
+      <input class="input" id="q" name="q" value={q} placeholder="Nombre o correo…" autocomplete="off" />
+    </div>
+    <div>
+      <label class="label" for="estado">Estado</label>
+      <select class="input w-44!" id="estado" name="estado">
+        <option value="" selected={!estado}>Todos</option>
+        <option value="activo" selected={estado === 'activo'}>Activos</option>
+        <option value="inactivo" selected={estado === 'inactivo'}>Inactivos</option>
+        <option value="con" selected={estado === 'con'}>Con acompañamiento</option>
+        <option value="sin" selected={estado === 'sin'}>Sin acompañamiento</option>
+      </select>
+    </div>
+    <div>
+      <label class="label" for="orden">Ordenar por</label>
+      <select class="input w-44!" id="orden" name="orden">
+        <option value="nombre" selected={orden === 'nombre'}>Nombre</option>
+        <option value="asignaciones" selected={orden === 'asignaciones'}>N° asignaciones</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" type="submit">Filtrar</button>
+    {(q || estado || orden !== 'nombre') && <a class="btn btn-ghost" href="/ekr/voluntarios">Limpiar</a>}
+  </form>
+
+  {lista.length === 0 ? (
+    <Empty icon="users" title="Sin resultados" text="No hay voluntarios con esos filtros." />
+  ) : (
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-line bg-cream/60">
+          <tr>
+            <th class="th">Nombre</th>
+            <th class="th">Correo</th>
+            <th class="th">Acompañamientos</th>
+            <th class="th">Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lista.map((v: any) => {
+            const bs = beneficiariosPorVol.get(v.id) ?? [];
+            return (
+              <tr class="border-t border-line hover:bg-cream/60">
+                <td class="td">
+                  <a class="link font-medium" href={`/ekr/voluntarios/${v.id}`}>{v.nombre}</a>
+                </td>
+                <td class="td text-blue-slate">{v.email ?? '—'}</td>
+                <td class="td text-blue-slate max-w-md">
+                  {bs.length === 0
+                    ? <span class="text-blue-slate/60">Sin acompañamiento</span>
+                    : (
+                      <div class="flex flex-wrap gap-1">
+                        {bs.map((b: any) => (
+                          <a
+                            href={`/ekr/beneficiarios/${b.id}`}
+                            class="rounded-full bg-cream px-2 py-0.5 text-xs font-medium text-ink hover:bg-rosy-taupe/30"
+                            title={`${b.nombre} (${b.estado})`}
+                          >
+                            {b.nombre}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                </td>
+                <td class="td">
+                  <Badge tone={v.activo ? 'green' : 'slate'} dot>
+                    {v.activo ? 'Activo' : 'Inactivo'}
+                  </Badge>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+</EkrLayout>

@@ -1,0 +1,234 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Badge from '../../../components/Badge.astro';
+import Icon from '../../../components/Icon.astro';
+import Empty from '../../../components/Empty.astro';
+import { getEkrContext, firstError, fmtDateTime, ACCION_AUDITORIA, TABLA_LABEL } from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro, { adminOnly: true });
+if (ctx instanceof Response) return ctx;
+const { supabase } = ctx;
+
+const entidad = Astro.url.searchParams.get('entidad') ?? '';
+const accion = Astro.url.searchParams.get('accion') ?? '';
+const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const PER = 25;
+
+let query = supabase
+  .from('auditoria')
+  .select('*', { count: 'exact' })
+  .order('created_at', { ascending: false });
+if (entidad) query = query.eq('entidad', entidad);
+if (accion) query = query.eq('accion', accion);
+const res = await query.range((page - 1) * PER, page * PER - 1);
+const loadError = firstError(res);
+const filas = res.data ?? [];
+const total = res.count ?? 0;
+const totalPag = Math.max(1, Math.ceil(total / PER));
+
+// Perfiles para mapear usuario_id → nombre
+const usuarioIds = [...new Set((filas as any[]).map((f) => f.usuario_id).filter(Boolean))];
+const perfiles = usuarioIds.length
+  ? (await supabase.from('profiles').select('id,nombre,email').in('id', usuarioIds)).data ?? []
+  : [];
+const perfilById = new Map<string, any>((perfiles as any[]).map((p: any) => [p.id, p]));
+
+const href = (over: Record<string, string | number>) => {
+  const p = new URLSearchParams();
+  if (entidad) p.set('entidad', entidad);
+  if (accion) p.set('accion', accion);
+  for (const [k, v] of Object.entries(over)) {
+    if (v === '' || (k === 'page' && v === 1)) p.delete(k);
+    else p.set(k, String(v));
+  }
+  const s = p.toString();
+  return '/ekr/auditoria' + (s ? `?${s}` : '');
+};
+
+function formatearValor(campo: string, v: unknown, perfilById: Map<string, any>): string {
+  if (v === null || v === undefined || v === '') return '∅';
+  // uuid → nombre de perfil
+  if (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    return perfilById.get(v)?.nombre ?? perfilById.get(v)?.email ?? v;
+  }
+  // Fecha ISO larga → dd/mm/yyyy hh:mm
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
+    return fmtDateTime(v);
+  }
+  // Fecha corta → dd/mm/yyyy
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const [y, m, d] = v.split('-');
+    return `${d}/${m}/${y}`;
+  }
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function cambios(a: any, perfilById: Map<string, any>): { campo: string; de?: string; a: string }[] {
+  const d = a.diff;
+  if (!d || typeof d !== 'object') return [];
+
+  // Forma C: old/new
+  if ('old' in d && 'new' in d && typeof d.old === 'object' && typeof d.new === 'object') {
+    const oldObj = d.old ?? {};
+    const newObj = d.new ?? {};
+    const campos = new Set([...Object.keys(oldObj), ...Object.keys(newObj)]);
+    return [...campos]
+      .filter((k) => JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k]))
+      .map((k) => ({
+        campo: k,
+        de: formatearValor(k, oldObj[k], perfilById),
+        a: formatearValor(k, newObj[k], perfilById),
+      }));
+  }
+
+  // Forma A: { campo: { de, a } }
+  if (a.accion === 'UPDATE') {
+    const entries = Object.entries(d) as [string, any][];
+    const esDiffEstructurado = entries.some(([, v]) => v && typeof v === 'object' && ('de' in v || 'a' in v));
+    if (esDiffEstructurado) {
+      return entries.map(([campo, x]) => ({
+        campo,
+        de: formatearValor(campo, x?.de, perfilById),
+        a: formatearValor(campo, x?.a, perfilById),
+      }));
+    }
+    return entries.map(([campo, v]) => ({ campo, a: formatearValor(campo, v, perfilById) }));
+  }
+
+  // INSERT / DELETE: valores planos
+  return Object.entries(d)
+    .filter(([, v]) => v !== null && v !== '')
+    .map(([campo, v]) => ({ campo, a: formatearValor(campo, v, perfilById) }));
+}
+
+function resumen(a: any): string {
+  const d = a.diff ?? {};
+  if (a.accion === 'UPDATE') {
+    if ('old' in d || 'new' in d) {
+      const oldObj = d.old ?? {};
+      const newObj = d.new ?? {};
+      const campos = new Set([...Object.keys(oldObj), ...Object.keys(newObj)]);
+      const cambiados = [...campos].filter((k) => JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k]));
+      return cambiados.slice(0, 3).join(', ') || '—';
+    }
+    return Object.keys(d).slice(0, 3).join(', ') || '—';
+  }
+  const plano = 'new' in d ? d.new : d;
+  return plano.nombre ?? plano.insumo ?? plano.asunto ?? plano.hoja ?? plano.email ?? '';
+}
+
+const nombreUsuario = (id: string | null) => {
+  if (!id) return null;
+  return perfilById.get(id)?.nombre ?? perfilById.get(id)?.email ?? null;
+};
+---
+
+<EkrLayout title="Auditoría" active="auditoria" ctx={ctx}>
+  <PageHeader title="Auditoría" subtitle="Registro de quién hizo qué y cuándo. Solo lo ve administración y nadie puede editarlo.">
+    <a href="/api/ekr/export?hoja=auditoria" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
+  </PageHeader>
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudo cargar la auditoría: {loadError}</div>}
+
+  <div class="card">
+    <form method="get" class="flex flex-wrap items-end gap-3 border-b border-line p-4">
+      <div>
+        <label class="label" for="entidad">Sección</label>
+        <select class="input w-52!" id="entidad" name="entidad">
+          <option value="">Todas</option>
+          {Object.entries(TABLA_LABEL).map(([k, l]) => <option value={k} selected={entidad === k}>{l}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="accion">Acción</label>
+        <select class="input w-40!" id="accion" name="accion">
+          <option value="">Todas</option>
+          {Object.entries(ACCION_AUDITORIA).map(([k, a]) => <option value={k} selected={accion === k}>{a.label}</option>)}
+        </select>
+      </div>
+      <button class="btn btn-primary" type="submit">Filtrar</button>
+      {(entidad || accion) && <a class="btn btn-ghost" href="/ekr/auditoria">Limpiar</a>}
+      <p class="ml-auto text-sm text-blue-slate">{total} registro(s)</p>
+    </form>
+
+    {filas.length === 0 ? (
+      <Empty icon="shield-check" title="Sin registros" text="Aún no hay movimientos con esos filtros." />
+    ) : (
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="border-b border-line bg-cream/60">
+            <tr>
+              <th class="th">Fecha</th>
+              <th class="th">Usuario</th>
+              <th class="th">Acción</th>
+              <th class="th">Sección</th>
+              <th class="th">Registro</th>
+              <th class="th">Detalle</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((a: any) => {
+              const cs = cambios(a, perfilById);
+              return (
+                <tr class="border-t border-line align-top hover:bg-cream/60">
+                  <td class="td whitespace-nowrap text-blue-slate">{fmtDateTime(a.created_at)}</td>
+                  <td class="td text-ink">
+                    {nombreUsuario(a.usuario_id) ?? <span class="text-blue-slate/60">sistema</span>}
+                  </td>
+                  <td class="td">
+                    <Badge tone={ACCION_AUDITORIA[a.accion]?.tone ?? 'slate'}>
+                      {ACCION_AUDITORIA[a.accion]?.label ?? a.accion}
+                    </Badge>
+                  </td>
+                  <td class="td text-blue-slate">{TABLA_LABEL[a.entidad] ?? a.entidad}</td>
+                  <td class="td text-xs text-blue-slate/80">
+                    {a.entidad_id
+                      ? (a.entidad === 'beneficiarios'
+                          ? <a class="link" href={`/ekr/beneficiarios/${a.entidad_id}`}>#{a.entidad_id}</a>
+                          : `#${a.entidad_id}`)
+                      : '—'}
+                  </td>
+                  <td class="td">
+                    {cs.length === 0
+                      ? <span class="text-blue-slate/60">—</span>
+                      : (
+                        <details>
+                          <summary class="cursor-pointer text-blue-slate hover:text-ink">
+                            {resumen(a) || `${cs.length} campo(s)`}
+                          </summary>
+                          <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg bg-cream p-3 text-xs">
+                            {cs.map((c) => (
+                              <>
+                                <dt class="font-semibold text-ink">{c.campo}</dt>
+                                <dd class="min-w-0 break-words text-blue-slate">
+                                  {c.de !== undefined
+                                    ? <><span class="line-through opacity-70">{c.de}</span> → <strong class="text-ink">{c.a}</strong></>
+                                    : c.a}
+                                </dd>
+                              </>
+                            ))}
+                          </dl>
+                        </details>
+                      )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    {filas.length > 0 && (
+      <div class="flex items-center justify-between border-t border-line px-4 py-3 text-sm text-blue-slate">
+        <span>Página {Math.min(page, totalPag)} de {totalPag}</span>
+        <div class="flex gap-2">
+          {page > 1 && <a class="btn btn-ghost btn-sm" href={href({ page: page - 1 })}><Icon name="chevron-left" size={14} /> Anterior</a>}
+          {page < totalPag && <a class="btn btn-ghost btn-sm" href={href({ page: page + 1 })}>Siguiente <Icon name="chevron-right" size={14} /></a>}
+        </div>
+      </div>
+    )}
+  </div>
+</EkrLayout>

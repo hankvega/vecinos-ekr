@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+/* Paleta de marca. Los tonos "deep", ink, cream y line son derivados de la paleta
+   (más oscuros/claros) para lograr contraste legible en texto y fondos. */
+@theme {
+  --color-blue-slate: #5E686F;
+  --color-dusty-rose: #AC7E81;
+  --color-rosy-taupe: #C19D94;
+  --color-salmon: #F9736B;
+
+  --color-ink: #3A4247;         /* blue-slate oscurecido: títulos */
+  --color-rose-deep: #8B5C60;   /* dusty-rose oscurecido: texto sobre fondos claros */
+  --color-salmon-deep: #B8403A; /* salmon oscurecido: texto de alerta */
+  --color-cream: #FBF8F7;       /* fondo cálido de la app */
+  --color-line: #ECE5E2;        /* bordes suaves */
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* Alias para páginas con estilos propios (login) */
+:root {
+  --blue-slate: #5E686F;
+  --dusty-rose: #AC7E81;
+  --rosy-taupe: #C19D94;
+  --salmon: #F9736B;
+}
+
+@layer base {
+  html { font-family: var(--font-sans); }
+  body { background: var(--color-cream); color: var(--color-blue-slate); }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-white shadow-[0_1px_2px_rgba(94,104,111,0.06)];
+  }
+  .btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-salmon disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary { @apply bg-blue-slate text-white hover:bg-ink; }
+  .btn-accent { @apply bg-salmon text-ink hover:brightness-95; }
+  .btn-ghost { @apply border border-line bg-white text-blue-slate hover:bg-cream; }
+  .btn-danger { @apply border border-salmon/40 bg-white text-salmon-deep hover:bg-salmon/10; }
+  .btn-sm { @apply px-2.5 py-1.5 text-xs; }
+
+  .input {
+    @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink placeholder:text-blue-slate/50 focus:border-dusty-rose focus:outline-none focus:ring-2 focus:ring-rosy-taupe/40;
+  }
+  .label {
+    @apply mb-1 block text-xs font-semibold tracking-wide text-blue-slate uppercase;
+  }
+  .th {
+    @apply px-4 py-3 text-left text-xs font-semibold tracking-wide whitespace-nowrap text-blue-slate/80 uppercase;
+  }
+  .td { @apply px-4 py-3 align-top; }
+  .link { @apply font-medium text-rose-deep underline-offset-2 hover:underline; }
+}

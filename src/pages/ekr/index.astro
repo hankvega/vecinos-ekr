@@ -1,0 +1,199 @@
+---
+import EkrLayout from '../../layouts/EkrLayout.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import StatCard from '../../components/StatCard.astro';
+import Badge from '../../components/Badge.astro';
+import Icon from '../../components/Icon.astro';
+import Empty from '../../components/Empty.astro';
+import Avatar from '../../components/Avatar.astro';
+import {
+  getEkrContext, firstError, saludo, porId, diasDesde, hace, donutGradient, pct,
+  ESTADOS_BENEFICIARIO, ESTADOS_BENEFICIARIO_KEYS, PRIORIDADES, ACCION_AUDITORIA, TABLA_LABEL, truncar,
+} from '../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase, profile, isAdmin } = ctx;
+
+const [ben, prof, asig, sol, men, aud] = await Promise.all([
+  supabase.from('beneficiarios').select('*'),
+  supabase.from('profiles').select('*'),
+  supabase.from('asignaciones').select('*').eq('activa', true),
+  supabase.from('insumo_solicitudes').select('*'),
+  supabase.from('mensajes').select('*'),
+  isAdmin
+    ? supabase.from('auditoria').select('*').order('created_at', { ascending: false }).limit(6)
+    : Promise.resolve({ data: [] as any[], error: null }),
+]);
+const loadError = firstError(ben, prof, asig, sol, men);
+
+const beneficiarios = ben.data ?? [];
+const voluntarios = (prof.data ?? []).filter((p: any) => p.rol === 'voluntario' && p.activo);
+const asignaciones = asig.data ?? [];
+const solicitudes = sol.data ?? [];
+const mensajes = men.data ?? [];
+const benById = porId<any>(beneficiarios);
+const profById = porId<any>(prof.data ?? []);
+
+const activos = beneficiarios.filter((b: any) => b.estado === 'activo');
+const espera = beneficiarios
+  .filter((b: any) => b.estado === 'lista_espera')
+  .sort((a: any, b: any) => (a.fecha_ingreso ?? '').localeCompare(b.fecha_ingreso ?? ''));
+const conVoluntario = new Set(asignaciones.map((a: any) => a.beneficiario_id));
+const sinVoluntario = activos.filter((b: any) => !conVoluntario.has(b.id));
+const solPendientes = solicitudes
+  .filter((s: any) => s.estado === 'pendiente')
+  .sort((a: any, b: any) => (PRIORIDADES[a.urgencia as keyof typeof PRIORIDADES]?.orden ?? 9) - (PRIORIDADES[b.urgencia as keyof typeof PRIORIDADES]?.orden ?? 9) || a.created_at.localeCompare(b.created_at));
+const urgencias = mensajes
+  .filter((m: any) => m.urgente && m.estado === 'abierto')
+  .sort((a: any, b: any) => b.created_at.localeCompare(a.created_at));
+const masAntigua = espera[0] ? diasDesde(espera[0].fecha_ingreso) : 0;
+
+const totalBen = beneficiarios.length;
+const segmentos = ESTADOS_BENEFICIARIO_KEYS.map((k) => ({
+  key: k,
+  ...ESTADOS_BENEFICIARIO[k],
+  value: beneficiarios.filter((b: any) => b.estado === k).length,
+}));
+const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.color })));
+---
+<EkrLayout title="Resumen" active="dashboard" ctx={ctx}>
+  <PageHeader title={`${saludo()}, ${profile.nombre.split(' ')[0]}`} subtitle="Así está el acompañamiento hoy.">
+    <a href="/ekr/beneficiarios/nuevo" class="btn btn-primary"><Icon name="user-plus" size={18} /> Nuevo beneficiario</a>
+    <a href="/ekr/mensajes#nuevo" class="btn btn-ghost"><Icon name="siren" size={18} /> Reportar urgencia</a>
+  </PageHeader>
+
+  {loadError && (
+    <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">
+      <strong>No se pudieron cargar algunos datos:</strong> {loadError}.
+      ¿Ya ejecutaste <code class="rounded bg-white/70 px-1">supabase/001_panel_ekr.sql</code> en tu proyecto?
+    </div>
+  )}
+
+  <section aria-label="Indicadores" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <StatCard label="Beneficiarios activos" value={activos.length} hint={`${totalBen} registrados en total`} icon="users" tone="green" href="/ekr/beneficiarios?estado=activo" />
+    <StatCard label="En lista de espera" value={espera.length} hint={espera.length ? `La más antigua espera hace ${masAntigua} días` : 'Sin personas esperando'} icon="hourglass" tone="taupe" href="/ekr/espera" />
+    <StatCard label="Activos sin voluntario/a" value={sinVoluntario.length} hint={sinVoluntario.length ? 'Necesitan acompañante' : 'Todos tienen acompañante'} icon="user-round-x" tone={sinVoluntario.length ? 'salmon' : 'slate'} href="/ekr/asignaciones" />
+    <StatCard label="Voluntarios/as activos" value={voluntarios.length} hint={`${asignaciones.length} acompañamientos vigentes`} icon="heart-handshake" tone="rose" href="/ekr/asignaciones" />
+    <StatCard label="Solicitudes pendientes" value={solPendientes.length} hint={`${solPendientes.filter((s: any) => s.urgencia === 'alta').length} de urgencia alta`} icon="package" tone={solPendientes.length ? 'salmon' : 'slate'} href="/ekr/solicitudes" />
+    <StatCard label="Urgencias abiertas" value={urgencias.length} hint={urgencias.length ? 'Requieren atención hoy' : 'Nada urgente por ahora'} icon="siren" tone={urgencias.length ? 'salmon' : 'slate'} href="/ekr/mensajes" />
+  </section>
+
+  <div class="mt-6 grid gap-6 xl:grid-cols-3">
+    <!-- Requiere atención -->
+    <section class="card xl:col-span-2" aria-labelledby="h-atencion">
+      <div class="flex items-center justify-between border-b border-line px-5 py-4">
+        <h2 id="h-atencion" class="font-semibold text-ink">Requiere atención</h2>
+        <a href="/ekr/mensajes" class="link text-sm">Ver mensajes</a>
+      </div>
+
+      {urgencias.length === 0 && solPendientes.length === 0 ? (
+        <Empty icon="circle-check" title="Todo al día" text="No hay urgencias abiertas ni solicitudes pendientes." />
+      ) : (
+        <ul class="divide-y divide-line">
+          {urgencias.slice(0, 4).map((m: any) => (
+            <li>
+              <a href="/ekr/mensajes" class="flex items-start gap-3 px-5 py-3.5 transition hover:bg-cream">
+                <span class="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-salmon/15 text-salmon-deep"><Icon name="siren" size={16} /></span>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-semibold text-ink">{m.asunto}</p>
+                  <p class="truncate text-sm text-blue-slate">
+                    {benById.get(m.beneficiario_id)?.nombre ?? 'General'} · {profById.get(m.autor_id)?.nombre ?? 'Equipo'}
+                  </p>
+                </div>
+                <div class="flex flex-col items-end gap-1"><Badge tone="salmon">Urgente</Badge><span class="text-xs text-blue-slate/80">{hace(m.created_at)}</span></div>
+              </a>
+            </li>
+          ))}
+          {solPendientes.slice(0, 4).map((s: any) => (
+            <li>
+              <a href="/ekr/solicitudes" class="flex items-start gap-3 px-5 py-3.5 transition hover:bg-cream">
+                <span class="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-rosy-taupe/25 text-rose-deep"><Icon name="package" size={16} /></span>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-semibold text-ink">{s.insumo} <span class="font-normal text-blue-slate">× {s.cantidad}</span></p>
+                  <p class="truncate text-sm text-blue-slate">{benById.get(s.beneficiario_id)?.nombre ?? '—'} · pide {profById.get(s.solicitado_por)?.nombre ?? 'el equipo'}</p>
+                </div>
+                <div class="flex flex-col items-end gap-1">
+                  <Badge tone={PRIORIDADES[s.urgencia as keyof typeof PRIORIDADES]?.tone ?? 'slate'}>Urgencia {PRIORIDADES[s.urgencia as keyof typeof PRIORIDADES]?.label.toLowerCase()}</Badge>
+                  <span class="text-xs text-blue-slate/80">{hace(s.created_at)}</span>
+                </div>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <!-- Distribución -->
+    <section class="card" aria-labelledby="h-dist">
+      <div class="border-b border-line px-5 py-4"><h2 id="h-dist" class="font-semibold text-ink">Beneficiarios por estado</h2></div>
+      <div class="flex flex-col items-center gap-5 px-5 py-6 sm:flex-row xl:flex-col">
+        <div class="relative size-36 shrink-0 rounded-full" style={`background:${dona}`} role="img" aria-label={`Distribución de ${totalBen} beneficiarios por estado`}>
+          <div class="absolute inset-[18px] grid place-items-center rounded-full bg-white text-center">
+            <div><p class="text-2xl font-bold text-ink tabular-nums">{totalBen}</p><p class="text-[11px] text-blue-slate">personas</p></div>
+          </div>
+        </div>
+        <ul class="w-full space-y-2.5 text-sm">
+          {segmentos.map((s) => (
+            <li class="flex items-center gap-2.5">
+              <span class="size-2.5 rounded-full" style={`background:${s.color}`}></span>
+              <span class="flex-1 text-blue-slate">{s.label}</span>
+              <span class="font-semibold text-ink tabular-nums">{s.value}</span>
+              <span class="w-10 text-right text-xs text-blue-slate/70 tabular-nums">{pct(s.value, totalBen)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+
+    <!-- Sin voluntario -->
+    <section class="card" aria-labelledby="h-sinvol">
+      <div class="flex items-center justify-between border-b border-line px-5 py-4">
+        <h2 id="h-sinvol" class="font-semibold text-ink">Esperan un/a acompañante</h2>
+        <a href="/ekr/asignaciones" class="link text-sm">Asignar</a>
+      </div>
+      {sinVoluntario.length === 0 ? (
+        <Empty icon="heart-handshake" title="Todos tienen acompañante" />
+      ) : (
+        <ul class="divide-y divide-line">
+          {sinVoluntario.slice(0, 5).map((b: any) => (
+            <li>
+              <a href={`/ekr/beneficiarios/${b.id}`} class="flex items-center gap-3 px-5 py-3 transition hover:bg-cream">
+                <Avatar nombre={b.nombre} size="sm" />
+                <div class="min-w-0 flex-1"><p class="truncate text-sm font-medium text-ink">{b.nombre}</p><p class="text-xs text-blue-slate">{b.comuna ?? 'Sin comuna'} · hace {diasDesde(b.fecha_ingreso)} días</p></div>
+                <Badge tone={PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.tone ?? 'slate'}>{PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.label ?? '—'}</Badge>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <!-- Actividad reciente -->
+    <section class="card xl:col-span-2" aria-labelledby="h-act">
+      <div class="flex items-center justify-between border-b border-line px-5 py-4">
+        <h2 id="h-act" class="font-semibold text-ink">{isAdmin ? 'Actividad reciente' : 'Mensajes recientes'}</h2>
+        {isAdmin ? <a href="/ekr/auditoria" class="link text-sm">Ver auditoría</a> : <a href="/ekr/mensajes" class="link text-sm">Ver todos</a>}
+      </div>
+      {isAdmin ? (
+        (aud.data ?? []).length === 0 ? <Empty icon="shield-check" title="Aún no hay actividad registrada" /> : (
+          <ul class="divide-y divide-line">
+            {(aud.data ?? []).map((a: any) => (
+              <li class="flex items-center gap-3 px-5 py-3 text-sm">
+                <Badge tone={ACCION_AUDITORIA[a.accion]?.tone ?? 'slate'}>{ACCION_AUDITORIA[a.accion]?.label ?? a.accion}</Badge>
+                <span class="min-w-0 flex-1 truncate text-blue-slate"><span class="font-medium text-ink">{TABLA_LABEL[a.tabla] ?? a.tabla}</span> · {a.user_email ?? 'sistema'}</span>
+                <span class="text-xs text-blue-slate/80 whitespace-nowrap">{hace(a.created_at)}</span>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : (
+        <ul class="divide-y divide-line">
+          {mensajes.slice().sort((a: any, b: any) => b.created_at.localeCompare(a.created_at)).slice(0, 5).map((m: any) => (
+            <li class="px-5 py-3 text-sm"><p class="font-medium text-ink">{m.asunto}</p><p class="text-blue-slate">{truncar(m.cuerpo, 110)}</p></li>
+          ))}
+        </ul>
+      )}
+    </section>
+  </div>
+</EkrLayout>

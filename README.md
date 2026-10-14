@@ -1,43 +1,26 @@
-# Astro Starter Kit: Minimal
+# Vecinos que Acompañan con Compasión — Plataforma EKR
+
+Seguimiento de usuarios del programa. Stack: Astro (SSR) + Supabase + Tailwind CSS.
+
+## Desarrollo local
 
 ```sh
-npm create astro@latest -- --template minimal
+cp .env.example .env.local   # y completa URL + anon key de Supabase
+npm install
+npm run dev                  # http://localhost:4321
 ```
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+## Checklist de configuración en Supabase
 
-## 🚀 Project Structure
+1. **Authentication → URL Configuration**: Site URL `http://localhost:4321` y en
+   Redirect URLs agregar `http://localhost:4321/api/auth/callback`
+   (más adelante, el dominio de producción de Cloudflare).
+2. **Authentication → Users**: la funcionaria EKR debe estar invitada con su correo.
+3. **Table Editor → profiles**: su fila debe tener `linked_user` con el UUID del
+   usuario de Auth (lo hace el trigger al aceptar la invitación).
 
-Inside of your Astro project, you'll see the following folders and files:
+## Estructura
 
-```text
-/
-├── public/
-├── src/
-│   └── pages/
-│       └── index.astro
-└── package.json
-```
-
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
-
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
-
-Any static assets, like images, can be placed in the `public/` directory.
-
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+- `src/middleware.ts` — protege todas las rutas (salvo `/login` y `/api/auth/*`); exige sesión.
+- `src/lib/supabase.ts` — cliente server con manejo de cookies de sesión.
+- `src/pages/api/auth/` — magic link: `login` (POST), `callback` (GET), `logout` (GET).

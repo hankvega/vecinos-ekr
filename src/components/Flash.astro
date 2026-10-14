@@ -1,0 +1,15 @@
+---
+import Icon from './Icon.astro';
+const ok = Astro.url.searchParams.get('ok');
+const error = Astro.url.searchParams.get('error');
+---
+{ok && (
+  <div role="status" class="mb-5 flex items-start gap-2 rounded-xl border border-emerald-600/20 bg-emerald-600/10 px-4 py-3 text-sm font-medium text-emerald-900">
+    <Icon name="circle-check" size={18} class="mt-0.5" /> <span>{ok}</span>
+  </div>
+)}
+{error && (
+  <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep">
+    <Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span>
+  </div>
+)}

@@ -1,0 +1,9 @@
+---
+import { TONE_CLASS, TONE_DOT, type Tone } from '../lib/ekr';
+interface Props { tone?: Tone; dot?: boolean; class?: string }
+const { tone = 'slate', dot = false, class: className = '' } = Astro.props;
+---
+<span class:list={['inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap', TONE_CLASS[tone], className]}>
+  {dot && <span class:list={['size-1.5 rounded-full', TONE_DOT[tone]]}></span>}
+  <slot />
+</span>

@@ -1,0 +1,101 @@
+---
+import { ESTADOS_BENEFICIARIO } from '../lib/ekr';
+
+interface Props { v?: Record<string, any>; }
+const { v = {} } = Astro.props;
+const estado = v.estado ?? 'lista_espera';
+---
+<div class="grid gap-4 sm:grid-cols-2">
+
+  <div class="sm:col-span-2">
+    <label class="label" for="nombre">Nombre completo *</label>
+    <input class="input" id="nombre" name="nombre" required maxlength="160" value={v.nombre ?? ''} autocomplete="off" />
+  </div>
+
+  <div>
+    <label class="label" for="rut">RUT</label>
+    <input class="input" id="rut" name="rut" placeholder="12.345.678-5" value={v.rut ?? ''} autocomplete="off" />
+  </div>
+
+  <div>
+    <label class="label" for="fecha_nacimiento">Fecha de nacimiento</label>
+    <input class="input" type="date" id="fecha_nacimiento" name="fecha_nacimiento" value={v.fecha_nacimiento ?? ''} />
+  </div>
+
+  <div>
+    <label class="label" for="genero">Género</label>
+    <select class="input" id="genero" name="genero">
+      <option value="">—</option>
+      <option value="Mujer" selected={v.genero === 'Mujer'}>Mujer</option>
+      <option value="Hombre" selected={v.genero === 'Hombre'}>Hombre</option>
+      <option value="Otro" selected={v.genero === 'Otro'}>Otro</option>
+    </select>
+  </div>
+
+  <div>
+    <label class="label" for="telefono">Teléfono</label>
+    <input class="input" type="tel" id="telefono" name="telefono" placeholder="+56 9 1234 5678" value={v.telefono ?? ''} />
+  </div>
+
+  <div>
+    <label class="label" for="comuna">Comuna</label>
+    <input class="input" id="comuna" name="comuna" value={v.comuna ?? ''} />
+  </div>
+
+  <div class="sm:col-span-2">
+    <label class="label" for="direccion">Dirección</label>
+    <input class="input" id="direccion" name="direccion" value={v.direccion ?? ''} />
+  </div>
+
+  <div>
+    <label class="label" for="estado">Estado *</label>
+    <select class="input" id="estado" name="estado" required>
+      {Object.entries(ESTADOS_BENEFICIARIO).map(([k, e]) => <option value={k} selected={estado === k}>{e.label}</option>)}
+    </select>
+  </div>
+
+  <div>
+    <label class="label" for="fecha_derivacion">Fecha de derivación</label>
+    <input class="input" type="date" id="fecha_derivacion" name="fecha_derivacion" value={v.fecha_derivacion ?? ''} />
+  </div>
+
+  <div class="sm:col-span-2">
+    <label class="label" for="programa_hospitalario">Programa hospitalario</label>
+    <input class="input" id="programa_hospitalario" name="programa_hospitalario" placeholder="Dependencia Severa, Cuidados Paliativos, Demencia…" value={v.programa_hospitalario ?? ''} />
+  </div>
+
+  <div>
+    <label class="label" for="derivado_por">Derivado por</label>
+    <input class="input" id="derivado_por" name="derivado_por" value={v.derivado_por ?? ''} />
+  </div>
+
+  <div class="sm:col-span-2 flex flex-wrap items-end gap-4">
+    <label class="flex items-center gap-2">
+      <input type="checkbox" name="usa_pañal" checked={v.usa_pañal === true} />
+      Usa pañal
+    </label>
+    <div>
+      <label class="label" for="talla_pañal">Talla pañal</label>
+      <input class="input" id="talla_pañal" name="talla_pañal" placeholder="G, M, XG…" value={v.talla_pañal ?? ''} />
+    </div>
+    <div>
+      <label class="label" for="tipo_pañal">Tipo pañal</label>
+      <input class="input" id="tipo_pañal" name="tipo_pañal" placeholder="Abierto, Calzón…" value={v.tipo_pañal ?? ''} />
+    </div>
+    <div>
+      <label class="label" for="apoyo_nutricion">Apoyo nutrición</label>
+      <input class="input" id="apoyo_nutricion" name="apoyo_nutricion" placeholder="Ensure, etc." value={v.apoyo_nutricion ?? ''} />
+    </div>
+  </div>
+
+  <div class="sm:col-span-2">
+    <label class="label" for="observaciones_derivador">Observaciones del derivador</label>
+    <textarea class="input min-h-24" id="observaciones_derivador" name="observaciones_derivador" rows="3">{v.observaciones_derivador ?? ''}</textarea>
+  </div>
+
+  <div class="sm:col-span-2">
+    <label class="label" for="observaciones_voluntaria">Observaciones de la voluntaria</label>
+    <textarea class="input min-h-24" id="observaciones_voluntaria" name="observaciones_voluntaria" rows="3">{v.observaciones_voluntaria ?? ''}</textarea>
+  </div>
+
+</div>

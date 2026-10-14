@@ -1,0 +1,103 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Empty from '../../../components/Empty.astro';
+import { getEkrContext, firstError, porId } from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase } = ctx;
+
+const q = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase();
+const conTel = Astro.url.searchParams.get('tel') === '1';
+
+const [cuid, ben] = await Promise.all([
+  supabase.from('cuidadores').select('*').order('nombre'),
+  supabase.from('beneficiarios').select('id,nombre'),
+]);
+const loadError = firstError(cuid, ben);
+const cuidadores = cuid.data ?? [];
+const benById = porId<any>(ben.data ?? []);
+
+const lista = cuidadores.filter((c: any) => {
+  if (q) {
+    const enNombre = (c.nombre ?? '').toLowerCase().includes(q);
+    const enRut = (c.rut ?? '').toLowerCase().includes(q);
+    const enBen = (benById.get(c.beneficiario_id)?.nombre ?? '').toLowerCase().includes(q);
+    if (!enNombre && !enRut && !enBen) return false;
+  }
+  if (conTel && !c.telefono) return false;
+  return true;
+});
+
+const totalConTel = cuidadores.filter((c: any) => c.telefono).length;
+const totalSinTel = cuidadores.length - totalConTel;
+---
+
+<EkrLayout title="Cuidadores" active="cuidadores" ctx={ctx}>
+  <PageHeader title="Cuidadores" subtitle="Familiares y responsables de los cuidados de cada vecino/a." />
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+
+  <div class="mb-4 grid gap-3 sm:grid-cols-3">
+    <div class="card p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-blue-slate">Total</p>
+      <p class="mt-1 text-2xl font-bold text-ink">{cuidadores.length}</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-blue-slate">Con teléfono</p>
+      <p class="mt-1 text-2xl font-bold text-ink">{totalConTel}</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-blue-slate">Sin teléfono</p>
+      <p class="mt-1 text-2xl font-bold text-ink">{totalSinTel}</p>
+    </div>
+  </div>
+
+  <form method="get" class="card mb-4 flex flex-wrap items-end gap-3 p-4">
+    <div class="min-w-52 flex-1">
+      <label class="label" for="q">Buscar</label>
+      <input class="input" id="q" name="q" value={q} placeholder="Nombre, RUT o beneficiario…" autocomplete="off" />
+    </div>
+    <label class="flex items-center gap-2 text-sm text-blue-slate">
+      <input type="checkbox" name="tel" value="1" checked={conTel} /> Solo con teléfono
+    </label>
+    <button class="btn btn-primary" type="submit">Filtrar</button>
+    {(q || conTel) && <a class="btn btn-ghost" href="/ekr/cuidadores">Limpiar</a>}
+  </form>
+
+  {lista.length === 0 ? (
+    <Empty icon="users" title="Sin resultados" text="No hay cuidadores con esos filtros." />
+  ) : (
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-line bg-cream/60">
+          <tr>
+            <th class="th">Nombre</th>
+            <th class="th">Vínculo</th>
+            <th class="th">RUT</th>
+            <th class="th">Teléfono</th>
+            <th class="th">Beneficiario</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lista.map((c: any) => (
+            <tr class="border-t border-line hover:bg-cream/60">
+              <td class="td">
+                <a class="link font-medium" href={`/ekr/cuidadores/${c.id}`}>{c.nombre}</a>
+              </td>
+              <td class="td text-blue-slate">{c.vinculo ?? '—'}</td>
+              <td class="td text-blue-slate">{c.rut ?? '—'}</td>
+              <td class="td text-blue-slate">{c.telefono ?? '—'}</td>
+              <td class="td">
+                <a class="link" href={`/ekr/beneficiarios/${c.beneficiario_id}`}>
+                  {benById.get(c.beneficiario_id)?.nombre ?? '—'}
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</EkrLayout>

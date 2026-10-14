@@ -1,0 +1,189 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import StatCard from '../../../components/StatCard.astro';
+import Icon from '../../../components/Icon.astro';
+import {
+  getEkrContext, firstError, contar, promedio, donutGradient, pct, porId, diasDesde,
+  ESTADOS_BENEFICIARIO, ESTADOS_BENEFICIARIO_KEYS, ESTADOS_SOLICITUD, TONE_DOT,
+} from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase, isAdmin } = ctx;
+
+const opciones = [{ v: '30', l: '30 días' }, { v: '90', l: '90 días' }, { v: '365', l: '12 meses' }, { v: '0', l: 'Todo' }];
+const dias = opciones.some((o) => o.v === Astro.url.searchParams.get('dias')) ? Number(Astro.url.searchParams.get('dias')) : 90;
+const desde = dias > 0 ? Date.now() - dias * 86_400_000 : 0;
+const enPeriodo = (iso: string | null | undefined) => !!iso && new Date(iso).getTime() >= desde;
+
+const [ben, prof, asig, sol, men] = await Promise.all([
+  supabase.from('beneficiarios').select('*'),
+  supabase.from('profiles').select('*'),
+  supabase.from('asignaciones').select('*').eq('activa', true),
+  supabase.from('insumo_solicitudes').select('*'),
+  supabase.from('mensajes').select('*'),
+]);
+const loadError = firstError(ben, prof, asig, sol, men);
+const beneficiarios = ben.data ?? [];
+const solicitudes = sol.data ?? [];
+const mensajes = men.data ?? [];
+
+// Indicadores del período
+const ingresos = beneficiarios.filter((b: any) => enPeriodo(b.fecha_ingreso)).length;
+const solPeriodo = solicitudes.filter((s: any) => enPeriodo(s.created_at));
+const resueltas = solPeriodo.filter((s: any) => s.resuelto_at);
+const horasResp = resueltas.map((s: any) => (new Date(s.resuelto_at).getTime() - new Date(s.created_at).getTime()) / 3_600_000);
+const respMedia = promedio(horasResp);
+const menPeriodo = mensajes.filter((m: any) => enPeriodo(m.created_at));
+const urgPeriodo = menPeriodo.filter((m: any) => m.urgente);
+const urgAtendidas = urgPeriodo.filter((m: any) => m.estado === 'atendido').length;
+
+const fmtResp = (h: number) => (resueltas.length === 0 ? '—' : h < 48 ? `${Math.round(h)} h` : `${(h / 24).toFixed(1)} d`);
+
+// Por estado (estado actual)
+const segmentos = ESTADOS_BENEFICIARIO_KEYS.map((k) => ({ k, ...ESTADOS_BENEFICIARIO[k], value: beneficiarios.filter((b: any) => b.estado === k).length }));
+const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.color })));
+
+// Por comuna (activos + en espera)
+const vigentesPersonas = beneficiarios.filter((b: any) => b.estado === 'activo' || b.estado === 'lista_espera');
+const comunas = contar(vigentesPersonas, (b: any) => b.comuna).slice(0, 8);
+const maxComuna = Math.max(1, ...comunas.map(([, n]) => n));
+
+// Solicitudes por mes (últimos 6)
+const mesKey = (d: Date) => new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', timeZone: 'America/Santiago' }).format(d).slice(0, 7);
+const mesLabel = (d: Date) => new Intl.DateTimeFormat('es-CL', { month: 'short', timeZone: 'America/Santiago' }).format(d).replace('.', '');
+const meses = Array.from({ length: 6 }, (_, i) => {
+  const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - (5 - i));
+  return { key: mesKey(d), label: mesLabel(d), n: 0 };
+});
+for (const s of solicitudes) { const m = meses.find((x) => x.key === mesKey(new Date(s.created_at))); if (m) m.n++; }
+const maxMes = Math.max(1, ...meses.map((m) => m.n));
+
+const solPorEstado = Object.entries(ESTADOS_SOLICITUD).map(([k, e]) => ({ k, ...e, n: solPeriodo.filter((s: any) => s.estado === k).length }));
+
+// Carga de voluntariado
+const cargas = new Map<string, number>();
+for (const a of asig.data ?? []) cargas.set(a.voluntario_id, (cargas.get(a.voluntario_id) ?? 0) + 1);
+const voluntarios = (prof.data ?? []).filter((p: any) => p.rol === 'voluntario' && p.activo)
+  .map((p: any) => ({ nombre: p.nombre, n: cargas.get(p.id) ?? 0 }))
+  .sort((a: any, b: any) => b.n - a.n);
+const maxCarga = Math.max(1, ...voluntarios.map((v: any) => v.n));
+const sinAcomp = beneficiarios.filter((b: any) => b.estado === 'activo' && !(asig.data ?? []).some((a: any) => a.beneficiario_id === b.id)).length;
+const esperas = beneficiarios.filter((b: any) => b.estado === 'lista_espera').map((b: any) => diasDesde(b.fecha_ingreso));
+
+const hojas = [
+  { k: 'beneficiarios', l: 'Beneficiarios', d: 'Fichas completas y acompañante actual' },
+  { k: 'espera', l: 'Lista de espera', d: 'Ordenada por prioridad, con días de espera' },
+  { k: 'asignaciones', l: 'Asignaciones', d: 'Vigentes e historial' },
+  { k: 'solicitudes', l: 'Solicitudes de insumos', d: 'Con estado, respuesta y tiempos' },
+  { k: 'mensajes', l: 'Mensajes y urgencias', d: 'Con quién los atendió y cuándo' },
+  ...(isAdmin ? [{ k: 'auditoria', l: 'Auditoría', d: 'Últimos 5.000 movimientos' }] : []),
+];
+---
+<EkrLayout title="Reportes" active="reportes" ctx={ctx}>
+  <PageHeader title="Reportes" subtitle="Cómo va el programa. Los indicadores de arriba cambian según el período.">
+    <nav aria-label="Período" class="flex rounded-lg border border-line bg-white p-0.5 text-sm font-medium">
+      {opciones.map((o) => (
+        <a href={`/ekr/reportes?dias=${o.v}`} aria-current={String(dias) === o.v ? 'page' : undefined} class:list={['rounded-md px-3 py-1.5 transition', String(dias) === o.v ? 'bg-blue-slate text-white' : 'text-blue-slate hover:bg-cream']}>{o.l}</a>
+      ))}
+    </nav>
+    <button type="button" id="print-btn" class="btn btn-ghost"><Icon name="printer" size={18} /> Imprimir</button>
+  </PageHeader>
+
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+
+  <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Indicadores del período">
+    <StatCard label="Nuevos ingresos" value={ingresos} hint={dias ? `En los últimos ${dias} días` : 'Histórico'} icon="user-plus" tone="green" />
+    <StatCard label="Solicitudes de insumos" value={solPeriodo.length} hint={`${resueltas.length} resueltas`} icon="package" tone="rose" />
+    <StatCard label="Tiempo medio de respuesta" value={fmtResp(respMedia)} hint="Entre pedido y resolución" icon="clock" tone="taupe" />
+    <StatCard label="Urgencias atendidas" value={urgPeriodo.length ? `${urgAtendidas}/${urgPeriodo.length}` : '—'} hint={urgPeriodo.length ? pct(urgAtendidas, urgPeriodo.length) + ' resueltas' : 'Sin urgencias en el período'} icon="siren" tone={urgPeriodo.length - urgAtendidas > 0 ? 'salmon' : 'slate'} />
+  </section>
+
+  <div class="mt-6 grid gap-6 lg:grid-cols-2">
+    <section class="card p-5" aria-labelledby="r1">
+      <h2 id="r1" class="font-semibold text-ink">Beneficiarios por estado</h2>
+      <div class="mt-5 flex flex-col items-center gap-6 sm:flex-row">
+        <div class="relative size-40 shrink-0 rounded-full" style={`background:${dona}`} role="img" aria-label="Distribución por estado">
+          <div class="absolute inset-5 grid place-items-center rounded-full bg-white text-center"><div><p class="text-3xl font-bold text-ink tabular-nums">{beneficiarios.length}</p><p class="text-xs text-blue-slate">personas</p></div></div>
+        </div>
+        <ul class="w-full space-y-3 text-sm">
+          {segmentos.map((s) => (
+            <li><div class="flex items-center gap-2.5"><span class="size-2.5 rounded-full" style={`background:${s.color}`}></span><span class="flex-1 text-blue-slate">{s.label}</span><span class="font-semibold text-ink tabular-nums">{s.value}</span><span class="w-10 text-right text-xs text-blue-slate/70 tabular-nums">{pct(s.value, beneficiarios.length)}</span></div></li>
+          ))}
+        </ul>
+      </div>
+    </section>
+
+    <section class="card p-5" aria-labelledby="r2">
+      <h2 id="r2" class="font-semibold text-ink">Personas por comuna <span class="text-sm font-normal text-blue-slate">(activas y en espera)</span></h2>
+      {comunas.length === 0 ? <p class="mt-4 text-sm text-blue-slate">Sin datos de comuna.</p> : (
+        <ul class="mt-4 space-y-3">
+          {comunas.map(([nombre, n]) => (
+            <li class="grid grid-cols-[7.5rem_1fr_2rem] items-center gap-3 text-sm">
+              <span class="truncate text-blue-slate">{nombre}</span>
+              <div class="h-2.5 overflow-hidden rounded-full bg-line"><div class="h-full rounded-full bg-dusty-rose" style={`width:${(n / maxComuna) * 100}%`}></div></div>
+              <span class="text-right font-semibold text-ink tabular-nums">{n}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <section class="card p-5" aria-labelledby="r3">
+      <h2 id="r3" class="font-semibold text-ink">Solicitudes de insumos por mes</h2>
+      <div class="mt-5 flex h-44 items-end gap-3" role="img" aria-label={`Solicitudes por mes: ${meses.map((m) => `${m.label} ${m.n}`).join(', ')}`}>
+        {meses.map((m) => (
+          <div class="flex flex-1 flex-col items-center justify-end gap-2">
+            <span class="text-xs font-semibold text-ink tabular-nums">{m.n}</span>
+            <div class="w-full rounded-t-lg bg-rosy-taupe" style={`height:${Math.max(4, (m.n / maxMes) * 100)}%`}></div>
+            <span class="text-xs text-blue-slate capitalize">{m.label}</span>
+          </div>
+        ))}
+      </div>
+      <ul class="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-4 text-sm">
+        {solPorEstado.map((s) => <li class="flex items-center gap-2 text-blue-slate"><span class:list={['size-2.5 rounded-full', TONE_DOT[s.tone]]}></span>{s.label} <strong class="text-ink tabular-nums">{s.n}</strong></li>)}
+      </ul>
+    </section>
+
+    <section class="card p-5" aria-labelledby="r4">
+      <h2 id="r4" class="font-semibold text-ink">Carga del voluntariado</h2>
+      {voluntarios.length === 0 ? <p class="mt-4 text-sm text-blue-slate">Aún no hay voluntarios/as activos.</p> : (
+        <ul class="mt-4 space-y-3">
+          {voluntarios.map((v: any) => (
+            <li class="grid grid-cols-[8rem_1fr_2rem] items-center gap-3 text-sm">
+              <span class="truncate text-blue-slate">{v.nombre}</span>
+              <div class="h-2.5 overflow-hidden rounded-full bg-line"><div class="h-full rounded-full bg-blue-slate" style={`width:${(v.n / maxCarga) * 100}%`}></div></div>
+              <span class="text-right font-semibold text-ink tabular-nums">{v.n}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p class="mt-4 border-t border-line pt-3 text-sm text-blue-slate">
+        {sinAcomp} persona(s) activa(s) sin acompañante · Espera promedio en lista: <strong class="text-ink">{Math.round(promedio(esperas))} días</strong>
+      </p>
+    </section>
+  </div>
+
+  <section class="card mt-6 p-5 print:hidden" aria-labelledby="r5">
+    <h2 id="r5" class="font-semibold text-ink">Exportar a Excel</h2>
+    <p class="mt-1 text-sm text-blue-slate">Cada descarga queda registrada en la auditoría. Los archivos contienen datos personales: guárdalos con cuidado.</p>
+    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {hojas.map((h) => (
+        <a href={`/api/ekr/export?hoja=${h.k}`} class="group flex items-center gap-3 rounded-xl border border-line p-3.5 transition hover:border-rosy-taupe hover:bg-cream">
+          <span class="grid size-10 place-items-center rounded-lg bg-emerald-600/10 text-emerald-700"><Icon name="file-spreadsheet" /></span>
+          <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-ink">{h.l}</span><span class="block truncate text-xs text-blue-slate">{h.d}</span></span>
+          <Icon name="download" size={16} class="text-blue-slate/60 group-hover:text-rose-deep" />
+        </a>
+      ))}
+      <a href="/api/ekr/export?hoja=todo" class="flex items-center gap-3 rounded-xl border border-blue-slate bg-blue-slate p-3.5 text-white transition hover:bg-ink">
+        <span class="grid size-10 place-items-center rounded-lg bg-white/15"><Icon name="download" /></span>
+        <span class="min-w-0 flex-1"><span class="block text-sm font-semibold">Todo en un solo libro</span><span class="block truncate text-xs text-white/80">Una hoja por cada sección</span></span>
+      </a>
+    </div>
+  </section>
+
+  <script>
+    document.getElementById('print-btn')?.addEventListener('click', () => window.print());
+  </script>
+</EkrLayout>

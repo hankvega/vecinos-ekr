@@ -1,0 +1,209 @@
+---
+import EkrLayout from '../../../layouts/EkrLayout.astro';
+import PageHeader from '../../../components/PageHeader.astro';
+import Badge from '../../../components/Badge.astro';
+import Icon from '../../../components/Icon.astro';
+import Avatar from '../../../components/Avatar.astro';
+import Empty from '../../../components/Empty.astro';
+import {
+  getEkrContext, back, str, oneOf, fmtDate, fmtDateTime, hace, firstError, ESTADOS_BENEFICIARIO,
+} from '../../../lib/ekr';
+
+const ctx = await getEkrContext(Astro);
+if (ctx instanceof Response) return ctx;
+const { supabase, isAdmin } = ctx;
+const id = Astro.params.id!;
+const aqui = `/ekr/voluntarios/${id}`;
+
+const { data: vol } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle();
+if (!vol) return back('/ekr/voluntarios', 'error', 'No se encontró ese voluntario.');
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const intent = str(form, 'intent');
+
+  if (intent === 'guardar') {
+    if (!isAdmin && ctx.profile.id !== id) return back(aqui, 'error', 'Solo administración puede editar otros perfiles.');
+    const nombre = str(form, 'nombre');
+    if (!nombre) return back(aqui, 'error', 'El nombre es obligatorio.');
+    const { error: e } = await supabase.from('profiles').update({
+      nombre,
+      email: str(form, 'email'),
+      telefono: str(form, 'telefono'),
+    }).eq('id', id);
+    if (e) return back(aqui, 'error', 'No se pudo guardar: ' + e.message);
+    return back(aqui, 'ok', 'Cambios guardados.');
+
+  } else if (intent === 'activar' || intent === 'desactivar') {
+    if (!isAdmin) return back(aqui, 'error', 'Solo administración puede activar/desactivar.');
+    const { error: e } = await supabase.from('profiles').update({ activo: intent === 'activar' }).eq('id', id);
+    if (e) return back(aqui, 'error', 'No se pudo cambiar el estado: ' + e.message);
+    return back(aqui, 'ok', intent === 'activar' ? 'Voluntario activado.' : 'Voluntario desactivado.');
+
+  } else if (intent === 'terminar-asignacion') {
+    const aid = str(form, 'asignacion_id');
+    if (!aid) return back(aqui, 'error', 'Falta la asignación.');
+    const { error: e } = await supabase
+      .from('asignaciones')
+      .update({ fecha_fin: new Date().toISOString().slice(0, 10) })
+      .eq('id', aid)
+      .eq('voluntaria_id', id);
+    if (e) return back(aqui, 'error', 'No se pudo finalizar: ' + e.message);
+    return back(aqui, 'ok', 'Acompañamiento finalizado.');
+  }
+}
+
+const [asig, ben, aud] = await Promise.all([
+  supabase.from('asignaciones').select('*').eq('voluntaria_id', id).order('fecha_inicio', { ascending: false }),
+  supabase.from('beneficiarios').select('id,nombre,rut,estado'),
+  isAdmin
+    ? supabase.from('auditoria').select('*').eq('entidad', 'profiles').eq('entidad_id', id).order('created_at', { ascending: false }).limit(8)
+    : Promise.resolve({ data: [] as any[] }),
+]);
+const loadError = firstError(asig, ben, aud);
+const benById = new Map<number, any>((ben.data ?? []).map((b: any) => [b.id, b]));
+const vigentes = (asig.data ?? []).filter((a: any) => a.activa);
+const pasadas = (asig.data ?? []).filter((a: any) => !a.activa);
+const puedeEditar = isAdmin || ctx.profile.id === id;
+---
+
+<EkrLayout title={vol.nombre} active="voluntarios" ctx={ctx}>
+  <PageHeader title={vol.nombre} subtitle={[vol.email, vol.telefono].filter(Boolean).join(' · ') || 'Voluntario/a'}>
+    <Badge tone={vol.activo ? 'green' : 'slate'} dot>{vol.activo ? 'Activo' : 'Inactivo'}</Badge>
+    <a href="/ekr/voluntarios" class="btn btn-ghost"><Icon name="chevron-left" size={16} /> Volver</a>
+  </PageHeader>
+
+  {error && <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep"><Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span></div>}
+  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar algunos datos: {loadError}</div>}
+
+  <div class="grid items-start gap-6 xl:grid-cols-3">
+    <div class="space-y-6 xl:col-span-2">
+      <form method="post" class="card p-6">
+        <input type="hidden" name="intent" value="guardar" />
+        <h2 class="mb-4 font-semibold text-ink">Datos del voluntario/a</h2>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="label" for="nombre">Nombre completo *</label>
+            <input class="input" id="nombre" name="nombre" required value={vol.nombre} disabled={!puedeEditar} />
+          </div>
+          <div>
+            <label class="label" for="email">Correo</label>
+            <input class="input" type="email" id="email" name="email" value={vol.email ?? ''} disabled={!puedeEditar} />
+          </div>
+          <div>
+            <label class="label" for="telefono">Teléfono</label>
+            <input class="input" type="tel" id="telefono" name="telefono" value={vol.telefono ?? ''} disabled={!puedeEditar} />
+          </div>
+        </div>
+
+        <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
+          <p class="text-xs text-blue-slate">
+            Registrado {fmtDate(vol.created_at)}
+            {vol.linked_user ? ' · cuenta vinculada' : ' · sin cuenta vinculada'}
+          </p>
+          {puedeEditar && <button type="submit" class="btn btn-primary"><Icon name="check" size={18} /> Guardar cambios</button>}
+        </div>
+      </form>
+
+      {isAdmin && (
+        <section class="card p-6">
+          <h2 class="font-semibold text-ink">Acciones</h2>
+          <p class="mt-1 text-sm text-blue-slate">
+            {vol.activo
+              ? 'Desactivar impide que este voluntario/a acceda al panel y aparezca en asignaciones.'
+              : 'Activar permite que este voluntario/a acceda al panel y aparezca en asignaciones.'}
+          </p>
+          <form method="post" class="mt-4" data-confirm={vol.activo ? `¿Desactivar a ${vol.nombre}?` : `¿Activar a ${vol.nombre}?`}>
+            <input type="hidden" name="intent" value={vol.activo ? 'desactivar' : 'activar'} />
+            <button type="submit" class:list={['btn', vol.activo ? 'btn-danger' : 'btn-primary']}>
+              <Icon name={vol.activo ? 'user-x' : 'user-check'} size={16} />
+              {vol.activo ? 'Desactivar' : 'Activar'}
+            </button>
+          </form>
+        </section>
+      )}
+    </div>
+
+    <div class="space-y-6">
+      <section class="card" aria-labelledby="h-asig">
+        <div class="border-b border-line px-5 py-4">
+          <h2 id="h-asig" class="font-semibold text-ink">Acompañamientos vigentes</h2>
+        </div>
+        {vigentes.length === 0 ? (
+          <p class="px-5 py-4 text-sm text-blue-slate">Sin acompañamientos activos.</p>
+        ) : (
+          <ul class="divide-y divide-line">
+            {vigentes.map((a: any) => {
+              const b = benById.get(a.beneficiario_id);
+              return (
+                <li class="flex items-center gap-3 px-5 py-3 text-sm">
+                  <Avatar nombre={b?.nombre} />
+                  <div class="min-w-0 flex-1">
+                    <a class="truncate font-medium text-ink link" href={`/ekr/beneficiarios/${a.beneficiario_id}`}>
+                      {b?.nombre ?? `#${a.beneficiario_id}`}
+                    </a>
+                    <p class="text-xs text-blue-slate">
+                      Desde {fmtDate(a.fecha_inicio)}
+                      {a.notas ? ` · ${a.notas}` : ''}
+                    </p>
+                  </div>
+                  <form method="post" data-confirm="¿Finalizar este acompañamiento?">
+                    <input type="hidden" name="intent" value="terminar-asignacion" />
+                    <input type="hidden" name="asignacion_id" value={a.id} />
+                    <button class="btn btn-ghost btn-sm" type="submit">Finalizar</button>
+                  </form>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {pasadas.length > 0 && (
+        <section class="card">
+          <details>
+            <summary class="cursor-pointer px-5 py-4 font-semibold text-ink">
+              Historial ({pasadas.length})
+            </summary>
+            <ul class="divide-y divide-line">
+              {pasadas.map((a: any) => {
+                const b = benById.get(a.beneficiario_id);
+                return (
+                  <li class="px-5 py-3 text-sm">
+                    <p class="text-ink">{b?.nombre ?? `#${a.beneficiario_id}`}</p>
+                    <p class="text-xs text-blue-slate">
+                      {fmtDate(a.fecha_inicio)} → {fmtDate(a.fecha_fin)}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        </section>
+      )}
+
+      {isAdmin && (
+        <section class="card" aria-labelledby="h-hist">
+          <div class="border-b border-line px-5 py-4">
+            <h2 id="h-hist" class="font-semibold text-ink">Historial de cambios</h2>
+          </div>
+          {(aud.data ?? []).length === 0 ? (
+            <p class="px-5 py-4 text-sm text-blue-slate">Sin cambios registrados.</p>
+          ) : (
+            <ul class="divide-y divide-line">
+              {(aud.data ?? []).map((a: any) => (
+                <li class="px-5 py-3 text-sm">
+                  <p class="text-xs text-blue-slate/80">{fmtDateTime(a.created_at)}</p>
+                  <p class="mt-0.5 text-ink">{a.accion}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
+  </div>
+</EkrLayout>

@@ -1,0 +1,29 @@
+---
+// Iconos Lucide desde @iconify-json/lucide (ya está en las dependencias).
+import lucide from '@iconify-json/lucide/icons.json';
+
+interface Props {
+  name: string;
+  class?: string;
+  size?: number;
+}
+const { name, class: className = '', size = 20 } = Astro.props;
+
+const set = lucide as { icons: Record<string, { body: string }>; aliases?: Record<string, { parent: string }> };
+const key = set.icons[name] ? name : set.aliases?.[name]?.parent;
+const body = key ? set.icons[key]?.body ?? '' : '';
+---
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 24 24"
+  width={size}
+  height={size}
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+  class:list={['shrink-0', className]}
+  set:html={body}
+/>
