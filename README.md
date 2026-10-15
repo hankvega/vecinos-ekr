@@ -12,9 +12,7 @@ npm run dev                  # http://localhost:4321
 
 ## Checklist de configuración en Supabase
 
-1. **Authentication → URL Configuration**: Site URL `http://localhost:4321` y en
-   Redirect URLs agregar `http://localhost:4321/api/auth/callback`
-   (más adelante, el dominio de producción de Cloudflare).
+1. **Authentication → URL Configuration**: Site URL `http://localhost:4321`
 2. **Authentication → Users**: la funcionaria EKR debe estar invitada con su correo.
 3. **Table Editor → profiles**: su fila debe tener `linked_user` con el UUID del
    usuario de Auth (lo hace el trigger al aceptar la invitación).

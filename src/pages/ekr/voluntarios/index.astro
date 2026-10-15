@@ -3,13 +3,14 @@ import EkrLayout from '../../../layouts/EkrLayout.astro';
 import PageHeader from '../../../components/PageHeader.astro';
 import Badge from '../../../components/Badge.astro';
 import Empty from '../../../components/Empty.astro';
-import { getEkrContext, firstError, porId } from '../../../lib/ekr';
+import { getEkrContext, firstError, porId, norm } from '../../../lib/ekr';
 
 const ctx = await getEkrContext(Astro);
 if (ctx instanceof Response) return ctx;
 const { supabase } = ctx;
 
-const q = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase();
+const q = (Astro.url.searchParams.get('q') ?? '').trim();
+const qn = norm(q);
 const estado = Astro.url.searchParams.get('estado') ?? ''; // activo | inactivo | con | sin
 const orden = Astro.url.searchParams.get('orden') ?? 'nombre'; // nombre | asignaciones
 
@@ -36,7 +37,7 @@ for (const a of asignaciones) {
 }
 
 let lista = voluntarios.filter((v: any) => {
-  if (q && !v.nombre.toLowerCase().includes(q) && !(v.email ?? '').toLowerCase().includes(q)) return false;
+  if (qn && !norm(v.nombre).includes(qn) && !norm(v.email ?? '').includes(qn)) return false;
   if (estado === 'activo' && !v.activo) return false;
   if (estado === 'inactivo' && v.activo) return false;
   const n = asignPorVol.get(v.id) ?? 0;

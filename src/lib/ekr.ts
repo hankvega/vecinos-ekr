@@ -290,6 +290,35 @@ export function contar<T>(lista: T[], clave: (x: T) => string | null | undefined
 export function porId<T extends { id: string }>(lista: T[]): Map<string, T> {
   return new Map(lista.map((x) => [x.id, x]));
 }
+export interface Paginado<T> {
+  vista: T[];
+  total: number;
+  paginas: number;
+  actual: number;
+  desde: number;
+  hasta: number;
+}
+
+/** Pagina una lista en memoria. Uso: paginar(filtrados, page, 20) */
+export function paginar<T>(lista: T[], page: number, per = 20): Paginado<T> {
+  const total = lista.length;
+  const paginas = Math.max(1, Math.ceil(total / per));
+  const actual = Math.min(Math.max(1, page), paginas);
+  const desde = (actual - 1) * per;
+  return {
+    vista: lista.slice(desde, desde + per),
+    total,
+    paginas,
+    actual,
+    desde: desde + 1,
+    hasta: Math.min(desde + per, total),
+  };
+}
+
+
+/** Normaliza un texto para búsquedas: sin tildes, minúsculas. */
+export const norm = (s: string): string =>
+  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
 /* ───────────── Utilidades de vista ───────────── */
 

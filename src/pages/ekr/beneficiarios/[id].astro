@@ -60,13 +60,13 @@ if (Astro.request.method === 'POST') {
     if (!vol) return back(aqui, 'error', 'Elige un voluntario/a.');
     if (actual.estado !== 'activo') return back(aqui, 'error', 'Solo se puede asignar acompañante a personas con estado Activo.');
     const { error: e } = await supabase.from('asignaciones').insert({
-  voluntaria_id: vol,
-  beneficiario_id: id,
-  fecha_inicio: hoy(),
-});
+      voluntaria_id: vol,
+      beneficiario_id: id,
+      fecha_inicio: hoy(),
+    });
     if (e) return back(aqui, 'error', (e as any).code === '23505' ? 'Esa persona ya está asignada.' : 'No se pudo asignar: ' + e.message);
     return back(aqui, 'ok', 'Acompañante asignado/a.');
-     } else if (intent === 'terminar') {
+  } else if (intent === 'terminar') {
     const aid = str(form, 'asignacion_id');
     if (!aid) return back(aqui, 'error', 'Falta la asignación.');
     const { error: e } = await supabase.from('asignaciones').update({ fecha_fin: hoy() }).eq('id', aid).eq('beneficiario_id', id);
@@ -85,7 +85,6 @@ if (Astro.request.method === 'POST') {
     });
     if (e) return back(aqui, 'error', 'No se pudo agregar el cuidador: ' + e.message);
     return back(aqui, 'ok', 'Cuidador agregado.');
-
   } else if (intent === 'editar-cuidador') {
     const cuid = str(form, 'cuidador_id');
     const nombre = str(form, 'cuidador_nombre');
@@ -99,14 +98,12 @@ if (Astro.request.method === 'POST') {
     }).eq('id', cuid).eq('beneficiario_id', id);
     if (e) return back(aqui, 'error', 'No se pudo actualizar: ' + e.message);
     return back(aqui, 'ok', 'Cuidador actualizado.');
-
-    } else if (intent === 'eliminar-cuidador') {
+  } else if (intent === 'eliminar-cuidador') {
     const cuid = str(form, 'cuidador_id');
     if (!cuid) return back(aqui, 'error', 'Falta el cuidador.');
     const { error: e } = await supabase.from('cuidadores').delete().eq('id', cuid).eq('beneficiario_id', id);
     if (e) return back(aqui, 'error', 'No se pudo eliminar: ' + e.message);
     return back(aqui, 'ok', 'Cuidador eliminado.');
-
   } else if (intent === 'crear-bitacora') {
     if (!['admin','coordinador'].includes(ctx.profile.rol)) {
       return back(aqui, 'error', 'Solo coordinación puede agregar registros.');
@@ -135,7 +132,6 @@ if (Astro.request.method === 'POST') {
     });
     if (e) return back(aqui, 'error', 'No se pudo guardar: ' + e.message);
     return back(aqui, 'ok', 'Registro agregado a la bitácora.');
-
   } else if (intent === 'editar-bitacora') {
     if (!['admin','coordinador'].includes(ctx.profile.rol)) {
       return back(aqui, 'error', 'Solo coordinación puede editar.');
@@ -152,7 +148,6 @@ if (Astro.request.method === 'POST') {
     }).eq('id', bid).eq('beneficiario_id', id);
     if (e) return back(aqui, 'error', 'No se pudo actualizar: ' + e.message);
     return back(aqui, 'ok', 'Registro actualizado.');
-
   } else if (intent === 'eliminar-bitacora') {
     if (ctx.profile.rol !== 'admin') {
       return back(aqui, 'error', 'Solo administración puede eliminar registros.');
@@ -181,30 +176,45 @@ const profs = prof.data ?? [];
 const profById = porId<any>(profs);
 const vigentes = (asig.data ?? []).filter((a: any) => a.activa);
 const pasadas = (asig.data ?? []).filter((a: any) => !a.activa);
-const asignadosIds = new Set(vigentes.map((a: any) => a.voluntario_id));
+const asignadosIds = new Set(vigentes.map((a: any) => a.voluntaria_id));
 const disponibles = profs.filter((p: any) => p.rol === 'voluntario' && p.activo && !asignadosIds.has(p.id));
 const e = edad(actual.fecha_nacimiento);
 const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIARIO];
 ---
+
 <EkrLayout title={actual.nombre} active="beneficiarios" ctx={ctx}>
-  <PageHeader title={actual.nombre} subtitle={[actual.rut, e !== null ? `${e} años` : null, actual.comuna].filter(Boolean).join(' · ')}>
+  <PageHeader
+    title={actual.nombre}
+    subtitle={[actual.rut, e !== null ? `${e} años` : null, actual.comuna].filter(Boolean).join(' · ')}
+  >
     <Badge tone={est?.tone ?? 'slate'} dot class="px-3! py-1! text-sm!">{est?.label ?? actual.estado}</Badge>
     <a href="/ekr/beneficiarios" class="btn btn-ghost"><Icon name="chevron-left" size={16} /> Volver</a>
   </PageHeader>
 
-  {error && <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep"><Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span></div>}
+  {error && (
+    <div role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep">
+      <Icon name="triangle-alert" size={18} class="mt-0.5" /> <span>{error}</span>
+    </div>
+  )}
 
   <div class="grid items-start gap-6 xl:grid-cols-3">
+
+    <!-- ═══════════ COLUMNA IZQUIERDA (2/3) ═══════════ -->
     <div class="space-y-6 xl:col-span-2">
+
       <form method="post" class="card p-6">
         <input type="hidden" name="intent" value="guardar" />
         <h2 class="mb-4 font-semibold text-ink">Ficha</h2>
         <BeneficiarioForm v={values} />
         <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
-          <p class="text-xs text-blue-slate">Registrado el {fmtDate(actual.created_at)}{actual.updated_at ? ` · actualizado ${hace(actual.updated_at)}` : ''}</p>
+          <p class="text-xs text-blue-slate">
+            Registrado el {fmtDate(actual.created_at)}
+            {actual.updated_at ? ` · actualizado ${hace(actual.updated_at)}` : ''}
+          </p>
           <button type="submit" class="btn btn-primary"><Icon name="check" size={18} /> Guardar cambios</button>
         </div>
       </form>
+
       <!-- Bitácora de seguimiento -->
       <section class="card" aria-labelledby="h-bit">
         <div class="border-b border-line px-5 py-4">
@@ -325,7 +335,9 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
       {isAdmin && (
         <section class="card border-salmon/30 p-6">
           <h2 class="font-semibold text-salmon-deep">Zona delicada</h2>
-          <p class="mt-1 text-sm text-blue-slate">Eliminar borra la ficha y sus asignaciones de forma permanente. Si la persona ya no participa, es mejor cambiar su estado a <strong>Egresado</strong> o <strong>Fallecido</strong>.</p>
+          <p class="mt-1 text-sm text-blue-slate">
+            Eliminar borra la ficha y sus asignaciones de forma permanente. Si la persona ya no participa, es mejor cambiar su estado a <strong>Egresado</strong> o <strong>Fallecido</strong>.
+          </p>
           <form method="post" data-confirm={`¿Eliminar definitivamente a ${actual.nombre}? Esta acción no se puede deshacer.`} class="mt-4">
             <input type="hidden" name="intent" value="eliminar" />
             <button type="submit" class="btn btn-danger"><Icon name="trash-2" size={16} /> Eliminar registro</button>
@@ -333,6 +345,10 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
         </section>
       )}
     </div>
+
+    <!-- ═══════════ COLUMNA DERECHA (1/3) ═══════════ -->
+    <div class="space-y-6">
+
       <!-- Observaciones -->
       <section class="card" aria-labelledby="h-obs">
         <div class="border-b border-line px-5 py-4">
@@ -360,33 +376,35 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
           </div>
         </div>
       </section>
-    <div class="space-y-6">
+
       <!-- Acompañamiento -->
       <section class="card" aria-labelledby="h-acomp">
-        <div class="border-b border-line px-5 py-4"><h2 id="h-acomp" class="font-semibold text-ink">Acompañamiento</h2></div>
+        <div class="border-b border-line px-5 py-4">
+          <h2 id="h-acomp" class="font-semibold text-ink">Acompañamiento</h2>
+        </div>
         {vigentes.length === 0 ? (
-          <p class="px-5 py-4 text-sm text-blue-slate">{actual.estado === 'activo' ? 'Aún no tiene voluntario/a asignado/a.' : 'Sin acompañante vigente.'}</p>
+          <p class="px-5 py-4 text-sm text-blue-slate">
+            {actual.estado === 'activo' ? 'Aún no tiene voluntario/a asignado/a.' : 'Sin acompañante vigente.'}
+          </p>
         ) : (
           <ul class="divide-y divide-line">
             {vigentes.map((a: any) => (
-  <li class="flex items-center gap-3 px-5 py-3 text-sm">
-    <Avatar nombre={profById.get(a.voluntaria_id)?.nombre} />
-    <div class="min-w-0 flex-1">
-      <p class="truncate font-medium text-ink">
-        {profById.get(a.voluntaria_id)?.nombre ?? '—'}
-      </p>
-      <p class="text-xs text-blue-slate">
-        Desde {fmtDate(a.fecha_inicio)}
-        {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
-      </p>
-    </div>
-    <form method="post" data-confirm="¿Finalizar este acompañamiento?">
-      <input type="hidden" name="intent" value="terminar" />
-      <input type="hidden" name="asignacion_id" value={a.id} />
-      <button class="btn btn-ghost btn-sm" type="submit">Finalizar</button>
-    </form>
-  </li>
-))}
+              <li class="flex items-center gap-3 px-5 py-3 text-sm">
+                <Avatar nombre={profById.get(a.voluntaria_id)?.nombre} />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate font-medium text-ink">{profById.get(a.voluntaria_id)?.nombre ?? '—'}</p>
+                  <p class="text-xs text-blue-slate">
+                    Desde {fmtDate(a.fecha_inicio)}
+                    {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
+                  </p>
+                </div>
+                <form method="post" data-confirm="¿Finalizar este acompañamiento?">
+                  <input type="hidden" name="intent" value="terminar" />
+                  <input type="hidden" name="asignacion_id" value={a.id} />
+                  <button class="btn btn-ghost btn-sm" type="submit">Finalizar</button>
+                </form>
+              </li>
+            ))}
           </ul>
         )}
         {actual.estado === 'activo' && (
@@ -399,10 +417,14 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
                 {disponibles.map((p: any) => <option value={p.id}>{p.nombre}</option>)}
               </select>
               <input class="input" name="notas" placeholder="Nota (opcional): ej. visita los martes" maxlength="200" />
-              <button class="btn btn-primary w-full" type="submit"><Icon name="heart-handshake" size={16} /> Asignar</button>
+              <button class="btn btn-primary w-full" type="submit">
+                <Icon name="heart-handshake" size={16} /> Asignar
+              </button>
             </form>
           ) : (
-            <p class="border-t border-line px-5 py-4 text-sm text-blue-slate">No hay más voluntarios/as disponibles. Agrégalos en <a class="link" href="/ekr/asignaciones">Asignaciones</a>.</p>
+            <p class="border-t border-line px-5 py-4 text-sm text-blue-slate">
+              No hay más voluntarios/as disponibles. Agrégalos en <a class="link" href="/ekr/asignaciones">Asignaciones</a>.
+            </p>
           )
         )}
         {pasadas.length > 0 && (
@@ -412,13 +434,14 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
               {pasadas.map((a: any) => (
                 <li>
                   {profById.get(a.voluntaria_id)?.nombre ?? '—'} · {fmtDate(a.fecha_inicio)} → {fmtDate(a.fecha_fin)}
-          {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
-  </li>
-))}
+                  {a.notas ? ` · ${truncar(a.notas, 60)}` : ''}
+                </li>
+              ))}
             </ul>
           </details>
         )}
       </section>
+
       <!-- Cuidadores -->
       <section class="card" aria-labelledby="h-cuid">
         <div class="border-b border-line px-5 py-4">
@@ -532,7 +555,7 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
         </details>
       </section>
 
-            <!-- Solicitudes -->
+      <!-- Solicitudes de insumos -->
       <section class="card" aria-labelledby="h-sol">
         <div class="flex items-center justify-between border-b border-line px-5 py-4">
           <h2 id="h-sol" class="font-semibold text-ink">Solicitudes de insumos</h2>
@@ -561,21 +584,26 @@ const est = ESTADOS_BENEFICIARIO[actual.estado as keyof typeof ESTADOS_BENEFICIA
         )}
       </section>
 
+      <!-- Historial de cambios (solo admin) -->
       {isAdmin && (
         <section class="card" aria-labelledby="h-hist">
-          <div class="border-b border-line px-5 py-4"><h2 id="h-hist" class="font-semibold text-ink">Historial de cambios</h2></div>
-          {(aud.data ?? []).length === 0 ? <p class="px-5 py-4 text-sm text-blue-slate">Sin cambios registrados.</p> : (
+          <div class="border-b border-line px-5 py-4">
+            <h2 id="h-hist" class="font-semibold text-ink">Historial de cambios</h2>
+          </div>
+          {(aud.data ?? []).length === 0 ? (
+            <p class="px-5 py-4 text-sm text-blue-slate">Sin cambios registrados.</p>
+          ) : (
             <ul class="divide-y divide-line">
               {(aud.data ?? []).map((a: any) => (
                 <li class="px-5 py-3 text-sm">
                   <div class="flex items-center justify-between gap-2">
                     <Badge tone={ACCION_AUDITORIA[a.accion]?.tone ?? 'slate'}>
-                       {ACCION_AUDITORIA[a.accion]?.label ?? a.accion}
+                      {ACCION_AUDITORIA[a.accion]?.label ?? a.accion}
                     </Badge>
                     <span class="text-xs text-blue-slate/80">{fmtDateTime(a.created_at)}</span>
-                 </div>
-                 <p class="mt-1 truncate text-xs text-blue-slate">
-                   {a.entidad} #{a.entidad_id}
+                  </div>
+                  <p class="mt-1 truncate text-xs text-blue-slate">
+                    {a.entidad} #{a.entidad_id}
                   </p>
                 </li>
               ))}

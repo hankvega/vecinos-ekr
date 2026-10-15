@@ -2,13 +2,14 @@
 import EkrLayout from '../../../layouts/EkrLayout.astro';
 import PageHeader from '../../../components/PageHeader.astro';
 import Empty from '../../../components/Empty.astro';
-import { getEkrContext, firstError, porId } from '../../../lib/ekr';
+import { getEkrContext, firstError, porId, norm } from '../../../lib/ekr';
 
 const ctx = await getEkrContext(Astro);
 if (ctx instanceof Response) return ctx;
 const { supabase } = ctx;
 
-const q = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase();
+const q = (Astro.url.searchParams.get('q') ?? '').trim();
+const qn = norm(q);
 const conTel = Astro.url.searchParams.get('tel') === '1';
 
 const [cuid, ben] = await Promise.all([
@@ -20,10 +21,10 @@ const cuidadores = cuid.data ?? [];
 const benById = porId<any>(ben.data ?? []);
 
 const lista = cuidadores.filter((c: any) => {
-  if (q) {
-    const enNombre = (c.nombre ?? '').toLowerCase().includes(q);
-    const enRut = (c.rut ?? '').toLowerCase().includes(q);
-    const enBen = (benById.get(c.beneficiario_id)?.nombre ?? '').toLowerCase().includes(q);
+  if (qn) {
+    const enNombre = norm(c.nombre ?? '').includes(qn);
+    const enRut = norm(c.rut ?? '').includes(qn);
+    const enBen = norm(benById.get(c.beneficiario_id)?.nombre ?? '').includes(qn);
     if (!enNombre && !enRut && !enBen) return false;
   }
   if (conTel && !c.telefono) return false;

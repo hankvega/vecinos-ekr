@@ -12,7 +12,7 @@ const { supabase } = ctx;
 
 const entidad = Astro.url.searchParams.get('entidad') ?? '';
 const accion = Astro.url.searchParams.get('accion') ?? '';
-const page = Math.max(1, Number(Astro.url.searchParams.get('page')) || 1);
+const page = Number(Astro.url.searchParams.get('page')) || 1;
 const PER = 25;
 
 let query = supabase
@@ -21,36 +21,44 @@ let query = supabase
   .order('created_at', { ascending: false });
 if (entidad) query = query.eq('entidad', entidad);
 if (accion) query = query.eq('accion', accion);
+
 const res = await query.range((page - 1) * PER, page * PER - 1);
 const loadError = firstError(res);
 const filas = res.data ?? [];
 const total = res.count ?? 0;
 const totalPag = Math.max(1, Math.ceil(total / PER));
 
-// Perfiles para mapear usuario_id → nombre
+// Perfiles para mapear usuario_id (auth.users.id) → nombre
 const usuarioIds = [...new Set((filas as any[]).map((f) => f.usuario_id).filter(Boolean))];
 const perfiles = usuarioIds.length
-  ? (await supabase.from('profiles').select('id,nombre,email,linked_user').in('linked_user', usuarioIds)).data ?? []
+  ? (await supabase
+      .from('profiles')
+      .select('id,nombre,email,linked_user')
+      .in('linked_user', usuarioIds)
+    ).data ?? []
   : [];
-const perfilByLinkedUser = new Map<string, any>((perfiles as any[]).map((p: any) => [p.linked_user, p]));
+const perfilByLinkedUser = new Map<string, any>(
+  (perfiles as any[]).map((p: any) => [p.linked_user, p]),
+);
 
 const href = (over: Record<string, string | number>) => {
-  const p = new URLSearchParams();
-  if (entidad) p.set('entidad', entidad);
-  if (accion) p.set('accion', accion);
+  const params = new URLSearchParams();
+  if (entidad) params.set('entidad', entidad);
+  if (accion) params.set('accion', accion);
   for (const [k, v] of Object.entries(over)) {
-    if (v === '' || (k === 'page' && v === 1)) p.delete(k);
-    else p.set(k, String(v));
+    if (v === '' || (k === 'page' && v === 1)) params.delete(k);
+    else params.set(k, String(v));
   }
-  const s = p.toString();
+  const s = params.toString();
   return '/ekr/auditoria' + (s ? `?${s}` : '');
 };
 
-function formatearValor(campo: string, v: unknown, perfilByLinkedUser: Map<string, any>): string {
+function formatearValor(v: unknown, perfilByLinkedUser: Map<string, any>): string {
   if (v === null || v === undefined || v === '') return '∅';
   // uuid → nombre de perfil
   if (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
-    return perfilByLinkedUser.get(v)?.nombre ?? perfilByLinkedUser.get(v)?.email ?? v;
+    const p = perfilByLinkedUser.get(v);
+    return p?.nombre ?? p?.email ?? v;
   }
   // Fecha ISO larga → dd/mm/yyyy hh:mm
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
@@ -65,11 +73,14 @@ function formatearValor(campo: string, v: unknown, perfilByLinkedUser: Map<strin
   return String(v);
 }
 
-function cambios(a: any, perfilById: Map<string, any>): { campo: string; de?: string; a: string }[] {
+function cambios(
+  a: any,
+  perfilByLinkedUser: Map<string, any>,
+): { campo: string; de?: string; a: string }[] {
   const d = a.diff;
   if (!d || typeof d !== 'object') return [];
 
-  // Forma C: old/new
+  // Forma C: { old: {...}, new: {...} }
   if ('old' in d && 'new' in d && typeof d.old === 'object' && typeof d.new === 'object') {
     const oldObj = d.old ?? {};
     const newObj = d.new ?? {};
@@ -78,29 +89,34 @@ function cambios(a: any, perfilById: Map<string, any>): { campo: string; de?: st
       .filter((k) => JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k]))
       .map((k) => ({
         campo: k,
-        de: formatearValor(k, oldObj[k], perfilById),
-        a: formatearValor(k, newObj[k], perfilById),
+        de: formatearValor(oldObj[k], perfilByLinkedUser),
+        a: formatearValor(newObj[k], perfilByLinkedUser),
       }));
   }
 
   // Forma A: { campo: { de, a } }
   if (a.accion === 'UPDATE') {
     const entries = Object.entries(d) as [string, any][];
-    const esDiffEstructurado = entries.some(([, v]) => v && typeof v === 'object' && ('de' in v || 'a' in v));
+    const esDiffEstructurado = entries.some(
+      ([, v]) => v && typeof v === 'object' && ('de' in v || 'a' in v),
+    );
     if (esDiffEstructurado) {
       return entries.map(([campo, x]) => ({
         campo,
-        de: formatearValor(campo, x?.de, perfilById),
-        a: formatearValor(campo, x?.a, perfilById),
+        de: formatearValor(x?.de, perfilByLinkedUser),
+        a: formatearValor(x?.a, perfilByLinkedUser),
       }));
     }
-    return entries.map(([campo, v]) => ({ campo, a: formatearValor(campo, v, perfilById) }));
+    return entries.map(([campo, v]) => ({
+      campo,
+      a: formatearValor(v, perfilByLinkedUser),
+    }));
   }
 
   // INSERT / DELETE: valores planos
   return Object.entries(d)
     .filter(([, v]) => v !== null && v !== '')
-    .map(([campo, v]) => ({ campo, a: formatearValor(campo, v, perfilById) }));
+    .map(([campo, v]) => ({ campo, a: formatearValor(v, perfilByLinkedUser) }));
 }
 
 function resumen(a: any): string {
@@ -110,7 +126,9 @@ function resumen(a: any): string {
       const oldObj = d.old ?? {};
       const newObj = d.new ?? {};
       const campos = new Set([...Object.keys(oldObj), ...Object.keys(newObj)]);
-      const cambiados = [...campos].filter((k) => JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k]));
+      const cambiados = [...campos].filter(
+        (k) => JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k]),
+      );
       return cambiados.slice(0, 3).join(', ') || '—';
     }
     return Object.keys(d).slice(0, 3).join(', ') || '—';
@@ -127,11 +145,20 @@ const nombreUsuario = (id: string | null) => {
 ---
 
 <EkrLayout title="Auditoría" active="auditoria" ctx={ctx}>
-  <PageHeader title="Auditoría" subtitle="Registro de quién hizo qué y cuándo. Solo lo ve administración y nadie puede editarlo.">
-    <a href="/api/ekr/export?hoja=auditoria" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
+  <PageHeader
+    title="Auditoría"
+    subtitle="Registro de quién hizo qué y cuándo. Solo lo ve administración y nadie puede editarlo."
+  >
+    <a href="/api/ekr/export?hoja=auditoria" class="btn btn-ghost">
+      <Icon name="file-spreadsheet" size={18} /> Exportar
+    </a>
   </PageHeader>
 
-  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudo cargar la auditoría: {loadError}</div>}
+  {loadError && (
+    <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">
+      No se pudo cargar la auditoría: {loadError}
+    </div>
+  )}
 
   <div class="card">
     <form method="get" class="flex flex-wrap items-end gap-3 border-b border-line p-4">
@@ -139,14 +166,18 @@ const nombreUsuario = (id: string | null) => {
         <label class="label" for="entidad">Sección</label>
         <select class="input w-52!" id="entidad" name="entidad">
           <option value="">Todas</option>
-          {Object.entries(TABLA_LABEL).map(([k, l]) => <option value={k} selected={entidad === k}>{l}</option>)}
+          {Object.entries(TABLA_LABEL).map(([k, l]) => (
+            <option value={k} selected={entidad === k}>{l}</option>
+          ))}
         </select>
       </div>
       <div>
         <label class="label" for="accion">Acción</label>
         <select class="input w-40!" id="accion" name="accion">
           <option value="">Todas</option>
-          {Object.entries(ACCION_AUDITORIA).map(([k, a]) => <option value={k} selected={accion === k}>{a.label}</option>)}
+          {Object.entries(ACCION_AUDITORIA).map(([k, a]) => (
+            <option value={k} selected={accion === k}>{a.label}</option>
+          ))}
         </select>
       </div>
       <button class="btn btn-primary" type="submit">Filtrar</button>
@@ -171,7 +202,7 @@ const nombreUsuario = (id: string | null) => {
           </thead>
           <tbody>
             {filas.map((a: any) => {
-              const cs = cambios(a, perfilById);
+              const cs = cambios(a, perfilByLinkedUser);
               return (
                 <tr class="border-t border-line align-top hover:bg-cream/60">
                   <td class="td whitespace-nowrap text-blue-slate">{fmtDateTime(a.created_at)}</td>
@@ -226,8 +257,16 @@ const nombreUsuario = (id: string | null) => {
       <div class="flex items-center justify-between border-t border-line px-4 py-3 text-sm text-blue-slate">
         <span>Página {Math.min(page, totalPag)} de {totalPag}</span>
         <div class="flex gap-2">
-          {page > 1 && <a class="btn btn-ghost btn-sm" href={href({ page: page - 1 })}><Icon name="chevron-left" size={14} /> Anterior</a>}
-          {page < totalPag && <a class="btn btn-ghost btn-sm" href={href({ page: page + 1 })}>Siguiente <Icon name="chevron-right" size={14} /></a>}
+          {page > 1 && (
+            <a class="btn btn-ghost btn-sm" href={href({ page: page - 1 })}>
+              <Icon name="chevron-left" size={14} /> Anterior
+            </a>
+          )}
+          {page < totalPag && (
+            <a class="btn btn-ghost btn-sm" href={href({ page: page + 1 })}>
+              Siguiente <Icon name="chevron-right" size={14} />
+            </a>
+          )}
         </div>
       </div>
     )}
