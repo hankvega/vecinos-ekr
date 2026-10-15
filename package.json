@@ -9,7 +9,9 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@iconify-json/lucide": "^1.2.142",
@@ -19,5 +21,9 @@
     "astro": "^7.3.8",
     "exceljs": "^4.4.0",
     "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
+

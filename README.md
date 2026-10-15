@@ -12,6 +12,6 @@ Plataforma de seguimiento del programa de acompañamiento de la Fundación Elisa
 ## Desarrollo local
 
 ```bash
-cp .env.example .env.local   # completar con URL + anon key de Supabase
+cp .env.example .env.local
 npm install
-npm run dev                  # http://localhost:4321
+npm run dev
