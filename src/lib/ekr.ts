@@ -57,7 +57,6 @@ export const TONE_ICON: Record<Tone, string> = {
   green: 'bg-emerald-600/10 text-emerald-700',
 };
 
-
 export const ESTADOS_BENEFICIARIO = {
   activo: { label: 'Activo', tone: 'green' as Tone, color: '#059669' },
   lista_espera: { label: 'Lista de espera', tone: 'taupe' as Tone, color: '#C19D94' },
@@ -99,8 +98,8 @@ export const TABLA_LABEL: Record<string, string> = {
   cuidadores: 'Cuidadores',
   acciones: 'Bitácora',
   adjuntos: 'Adjuntos',
-  export: 'Exportaciones',        // ← agrega esta
-  todo: 'Exportación completa',   // ← y esta
+  export: 'Exportaciones',
+  todo: 'Exportación completa',
 };
 
 /* ───────────── Contexto y autorización ───────────── */
@@ -123,12 +122,15 @@ export async function getEkrContext(
   opts: { adminOnly?: boolean } = {},
 ): Promise<EkrCtx | Response> {
   const supabase = createClient(Astro);
+
+  // Reusar el user que dejó el middleware. Si no está, validar el JWT.
   const user = Astro.locals.user ?? (await supabase.auth.getUser()).data.user;
   if (!user) return Astro.redirect('/login');
 
+  // Solo las columnas necesarias (evita payload innecesario)
   const { data: profile, error } = await supabase
     .from('profiles')
-    .select('*')
+    .select('id,nombre,email,telefono,rol,activo,linked_user')
     .eq('linked_user', user.id)
     .maybeSingle();
   if (error) console.error('[ekr] No se pudo leer el perfil:', error.message);
@@ -136,13 +138,26 @@ export async function getEkrContext(
   if (!profile || profile.activo === false || !STAFF.includes(profile.rol)) {
     return Astro.redirect('/ekr/sin-acceso');
   }
-  const isAdmin = profile.rol === 'admin';
-  if (opts.adminOnly && !isAdmin) return Astro.redirect('/ekr?error=' + encodeURIComponent('Solo administración puede ver esa sección'));
 
+  const isAdmin = profile.rol === 'admin';
+  if (opts.adminOnly && !isAdmin) {
+    return Astro.redirect(
+      '/ekr?error=' + encodeURIComponent('Solo administración puede ver esa sección'),
+    );
+  }
+
+  // Badges en paralelo
   const [sol, urg] = await Promise.all([
-  supabase.from('insumo_solicitudes').select('id', { count: 'exact', head: true }).eq('estado', 'solicitado'),
-  supabase.from('mensajes').select('id', { count: 'exact', head: true }).eq('tipo', 'urgencia').eq('leido', false),
-]);
+    supabase
+      .from('insumo_solicitudes')
+      .select('id', { count: 'exact', head: true })
+      .eq('estado', 'solicitado'),
+    supabase
+      .from('mensajes')
+      .select('id', { count: 'exact', head: true })
+      .eq('tipo', 'urgencia')
+      .eq('leido', false),
+  ]);
 
   return {
     supabase,
@@ -232,7 +247,7 @@ export function fmtDateTime(v: string | null | undefined): string {
 }
 
 export function hoy(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date()); // yyyy-mm-dd
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 }
 
 export function diasDesde(v: string | null | undefined): number {
@@ -268,7 +283,9 @@ export function hace(v: string | null | undefined): string {
 }
 
 export function saludo(): string {
-  const h = Number(new Intl.DateTimeFormat('es-CL', { hour: 'numeric', hour12: false, timeZone: TZ }).format(new Date()));
+  const h = Number(
+    new Intl.DateTimeFormat('es-CL', { hour: 'numeric', hour12: false, timeZone: TZ }).format(new Date()),
+  );
   return h < 12 ? 'Buenos días' : h < 20 ? 'Buenas tardes' : 'Buenas noches';
 }
 
@@ -290,6 +307,7 @@ export function contar<T>(lista: T[], clave: (x: T) => string | null | undefined
 export function porId<T extends { id: string }>(lista: T[]): Map<string, T> {
   return new Map(lista.map((x) => [x.id, x]));
 }
+
 export interface Paginado<T> {
   vista: T[];
   total: number;
@@ -315,14 +333,13 @@ export function paginar<T>(lista: T[], page: number, per = 20): Paginado<T> {
   };
 }
 
-
 /** Normaliza un texto para búsquedas: sin tildes, minúsculas. */
 export const norm = (s: string): string =>
   s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
 /* ───────────── Utilidades de vista ───────────── */
 
-/** Primer error de un conjunto de consultas Supabase (para mostrar un aviso útil). */
+/** Primer error de un conjunto de consultas Supabase. */
 export function firstError(...results: Array<{ error?: { message: string } | null }>): string | null {
   for (const r of results) if (r?.error) return r.error.message;
   return null;
