@@ -11,7 +11,6 @@ export default defineConfig({
       SUPABASE_URL: envField.string({ 
         context: 'server', 
         access: 'secret',
-        optional: true 
       }),
       SUPABASE_ANON_KEY: envField.string({ 
         context: 'server', 

@@ -5,14 +5,6 @@ export const GET: APIRoute = async (context) => {
   const { url } = context;
   const code = url.searchParams.get('code');
 
-  if (code) {
-    const supabase = createClient(context);
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
-
-    if (!error) {
-      return Response.redirect(new URL('/', url), 302);
-    }
-  }
     if (code) {
       const supabase = createClient(context);
       const { error } = await supabase.auth.exchangeCodeForSession(code);

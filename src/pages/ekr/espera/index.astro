@@ -5,8 +5,9 @@ import StatCard from '../../../components/StatCard.astro';
 import Badge from '../../../components/Badge.astro';
 import Icon from '../../../components/Icon.astro';
 import Empty from '../../../components/Empty.astro';
-import Avatar from '../../../components/Avatar.astro';
-import { getEkrContext, back, str, oneOf, hoy, diasDesde, promedio, fmtDate, truncar, PRIORIDADES } from '../../../lib/ekr';
+import {
+  getEkrContext, back, str, oneOf, hoy, diasDesde, promedio, fmtDate, truncar, PRIORIDADES,
+} from '../../../lib/ekr';
 
 const ctx = await getEkrContext(Astro);
 if (ctx instanceof Response) return ctx;
@@ -19,15 +20,25 @@ if (Astro.request.method === 'POST') {
   if (!id) return back('/ekr/espera', 'error', 'Falta la persona.');
 
   if (intent === 'admitir') {
-    const { error } = await supabase.from('beneficiarios').update({ estado: 'activo' }).eq('id', id).eq('estado', 'lista_espera');
+    const { error } = await supabase
+      .from('beneficiarios')
+      .update({ estado: 'activo' })
+      .eq('id', id)
+      .eq('estado', 'lista_espera');
     if (error) return back('/ekr/espera', 'error', 'No se pudo admitir: ' + error.message);
+
     const vol = str(form, 'voluntario_id');
     if (vol) {
-      const { error: e2 } = await supabase.from('asignaciones').insert({ voluntario_id: vol, beneficiario_id: id, fecha_inicio: hoy() });
+      const { error: e2 } = await supabase.from('asignaciones').insert({
+        voluntaria_id: vol,        // ← corregido (era voluntario_id)
+        beneficiario_id: id,
+        fecha_inicio: hoy(),
+      });
       if (e2) return back('/ekr/espera', 'error', 'Se admitió, pero no se pudo asignar acompañante: ' + e2.message);
     }
     return back('/ekr/espera', 'ok', vol ? 'Persona admitida y con acompañante asignado/a.' : 'Persona admitida. Recuerda asignarle un acompañante.');
   }
+
   if (intent === 'prioridad') {
     const p = oneOf(str(form, 'prioridad'), ['alta', 'media', 'baja'] as const);
     if (!p) return back('/ekr/espera', 'error', 'Prioridad no válida.');
@@ -39,21 +50,30 @@ if (Astro.request.method === 'POST') {
 
 const [ben, prof, asig] = await Promise.all([
   supabase.from('beneficiarios').select('*').eq('estado', 'lista_espera'),
-  supabase.from('profiles').select('*'),
-  supabase.from('asignaciones').select('*').eq('activa', true),
+  supabase.from('profiles').select('id,nombre,rol,activo'),
+  supabase.from('asignaciones').select('voluntaria_id,beneficiario_id').eq('activa', true),
 ]);
+
 const cargas = new Map<string, number>();
-for (const a of asig.data ?? []) cargas.set(a.voluntario_id, (cargas.get(a.voluntario_id) ?? 0) + 1);
+for (const a of asig.data ?? []) {
+  cargas.set(a.voluntaria_id, (cargas.get(a.voluntaria_id) ?? 0) + 1);  // ← corregido
+}
+
 const voluntarios = (prof.data ?? [])
   .filter((p: any) => p.rol === 'voluntario' && p.activo)
   .sort((a: any, b: any) => (cargas.get(a.id) ?? 0) - (cargas.get(b.id) ?? 0));
 
+// Orden: primero prioridad (alta → baja), luego por fecha de derivación más antigua
 const espera = (ben.data ?? []).sort((a: any, b: any) =>
-  (PRIORIDADES[a.prioridad as keyof typeof PRIORIDADES]?.orden ?? 1) - (PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.orden ?? 1)
-  || (a.fecha_ingreso ?? '').localeCompare(b.fecha_ingreso ?? ''));
+  (PRIORIDADES[a.prioridad as keyof typeof PRIORIDADES]?.orden ?? 1) -
+    (PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.orden ?? 1) ||
+  (a.fecha_derivacion ?? '').localeCompare(b.fecha_derivacion ?? ''),
+);
+
 const altas = espera.filter((b: any) => b.prioridad === 'alta').length;
-const dias = espera.map((b: any) => diasDesde(b.fecha_ingreso));
+const dias = espera.map((b: any) => diasDesde(b.fecha_derivacion));  // ← corregido
 ---
+
 <EkrLayout title="Lista de espera" active="espera" ctx={ctx}>
   <PageHeader title="Lista de espera" subtitle="Ordenada por prioridad y, a igual prioridad, por antigüedad.">
     <a href="/api/ekr/export?hoja=espera" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
@@ -77,28 +97,44 @@ const dias = espera.map((b: any) => diasDesde(b.fecha_ingreso));
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
                 <a href={`/ekr/beneficiarios/${b.id}`} class="font-semibold text-ink hover:underline">{b.nombre}</a>
-                <Badge tone={PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.tone ?? 'slate'} dot>Prioridad {PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.label.toLowerCase()}</Badge>
+                <Badge tone={PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.tone ?? 'slate'} dot>
+                  Prioridad {PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.label?.toLowerCase() ?? 'media'}
+                </Badge>
               </div>
-              <p class="mt-0.5 text-sm text-blue-slate">{b.comuna ?? 'Sin comuna'} · Espera hace {diasDesde(b.fecha_ingreso)} días (desde {fmtDate(b.fecha_ingreso)}){b.telefono ? ` · ${b.telefono}` : ''}</p>
-              {b.notas && <p class="mt-1 text-sm text-blue-slate/90">{truncar(b.notas, 140)}</p>}
+              <p class="mt-0.5 text-sm text-blue-slate">
+                {b.comuna ?? 'Sin comuna'} · Espera hace {diasDesde(b.fecha_derivacion)} días
+                {b.fecha_derivacion ? ` (desde ${fmtDate(b.fecha_derivacion)})` : ''}
+                {b.telefono ? ` · ${b.telefono}` : ''}
+              </p>
+              {b.observaciones_voluntaria && (
+                <p class="mt-1 text-sm text-blue-slate/90">{truncar(b.observaciones_voluntaria, 140)}</p>
+              )}
             </div>
             <div class="flex flex-wrap items-center gap-2 lg:justify-end">
               <form method="post" class="flex items-center gap-1.5">
-                <input type="hidden" name="intent" value="prioridad" /><input type="hidden" name="id" value={b.id} />
+                <input type="hidden" name="intent" value="prioridad" />
+                <input type="hidden" name="id" value={b.id} />
                 <label class="sr-only" for={`pr-${b.id}`}>Prioridad</label>
                 <select id={`pr-${b.id}`} name="prioridad" class="input w-auto! py-1.5! text-xs">
-                  {Object.entries(PRIORIDADES).map(([k, p]) => <option value={k} selected={b.prioridad === k}>{p.label}</option>)}
+                  {Object.entries(PRIORIDADES).map(([k, p]) => (
+                    <option value={k} selected={b.prioridad === k}>{p.label}</option>
+                  ))}
                 </select>
                 <button class="btn btn-ghost btn-sm" type="submit">Cambiar</button>
               </form>
               <form method="post" class="flex items-center gap-1.5" data-confirm={`¿Admitir a ${b.nombre} al programa?`}>
-                <input type="hidden" name="intent" value="admitir" /><input type="hidden" name="id" value={b.id} />
+                <input type="hidden" name="intent" value="admitir" />
+                <input type="hidden" name="id" value={b.id} />
                 <label class="sr-only" for={`vol-${b.id}`}>Acompañante</label>
                 <select id={`vol-${b.id}`} name="voluntario_id" class="input w-auto! py-1.5! text-xs">
                   <option value="">Sin acompañante aún</option>
-                  {voluntarios.map((v: any) => <option value={v.id}>{v.nombre} ({cargas.get(v.id) ?? 0})</option>)}
+                  {voluntarios.map((v: any) => (
+                    <option value={v.id}>{v.nombre} ({cargas.get(v.id) ?? 0})</option>
+                  ))}
                 </select>
-                <button class="btn btn-primary btn-sm" type="submit"><Icon name="user-check" size={14} /> Admitir</button>
+                <button class="btn btn-primary btn-sm" type="submit">
+                  <Icon name="user-check" size={14} /> Admitir
+                </button>
               </form>
             </div>
           </li>

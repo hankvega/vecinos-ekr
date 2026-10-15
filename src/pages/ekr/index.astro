@@ -15,15 +15,16 @@ const ctx = await getEkrContext(Astro);
 if (ctx instanceof Response) return ctx;
 const { supabase, profile, isAdmin } = ctx;
 
-const [ben, prof, asig, sol, men, aud] = await Promise.all([
+const [ben, prof, asig, sol, men, aud, items] = await Promise.all([
   supabase.from('beneficiarios').select('*'),
-  supabase.from('profiles').select('*'),
+  supabase.from('profiles').select('id,nombre,rol,activo,email'),
   supabase.from('asignaciones').select('*').eq('activa', true),
   supabase.from('insumo_solicitudes').select('*'),
   supabase.from('mensajes').select('*'),
   isAdmin
-    ? supabase.from('auditoria').select('*').order('created_at', { ascending: false }).limit(6)
+    ? supabase.from('auditoria').select('id,usuario_id,entidad,entidad_id,accion,created_at').order('created_at', { ascending: false }).limit(6)
     : Promise.resolve({ data: [] as any[], error: null }),
+  supabase.from('insumo_items').select('*'),
 ]);
 const loadError = firstError(ben, prof, asig, sol, men);
 
@@ -35,27 +36,40 @@ const mensajes = men.data ?? [];
 const benById = porId<any>(beneficiarios);
 const profById = porId<any>(prof.data ?? []);
 
+const itemsPorSolicitud = new Map<number, any[]>();
+for (const it of items.data ?? []) {
+  const arr = itemsPorSolicitud.get(it.solicitud_id) ?? [];
+  arr.push(it);
+  itemsPorSolicitud.set(it.solicitud_id, arr);
+}
+
 const activos = beneficiarios.filter((b: any) => b.estado === 'activo');
 const espera = beneficiarios
   .filter((b: any) => b.estado === 'lista_espera')
-  .sort((a: any, b: any) => (a.fecha_ingreso ?? '').localeCompare(b.fecha_ingreso ?? ''));
+  .sort((a: any, b: any) => (a.fecha_derivacion ?? '').localeCompare(b.fecha_derivacion ?? ''));
 const conVoluntario = new Set(asignaciones.map((a: any) => a.beneficiario_id));
 const sinVoluntario = activos.filter((b: any) => !conVoluntario.has(b.id));
 const solPendientes = solicitudes
-  .filter((s: any) => s.estado === 'pendiente')
+  .filter((s: any) => s.estado === 'solicitado')
   .sort((a: any, b: any) => (PRIORIDADES[a.urgencia as keyof typeof PRIORIDADES]?.orden ?? 9) - (PRIORIDADES[b.urgencia as keyof typeof PRIORIDADES]?.orden ?? 9) || a.created_at.localeCompare(b.created_at));
 const urgencias = mensajes
-  .filter((m: any) => m.urgente && m.estado === 'abierto')
+  .filter((m: any) => m.tipo === 'urgencia' && !m.leido)
   .sort((a: any, b: any) => b.created_at.localeCompare(a.created_at));
-const masAntigua = espera[0] ? diasDesde(espera[0].fecha_ingreso) : 0;
+const masAntigua = espera[0] ? diasDesde(espera[0].fecha_derivacion) : 0;
 
 const totalBen = beneficiarios.length;
-const segmentos = ESTADOS_BENEFICIARIO_KEYS.map((k) => ({
+const segmentos = (ESTADOS_BENEFICIARIO_KEYS ?? []).map((k) => ({
   key: k,
   ...ESTADOS_BENEFICIARIO[k],
   value: beneficiarios.filter((b: any) => b.estado === k).length,
 }));
 const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.color })));
+
+const resumenItems = (solicitudId: number) => {
+  const arr = itemsPorSolicitud.get(solicitudId) ?? [];
+  if (arr.length === 0) return 'Sin ítems';
+  return arr.map((i: any) => `${i.tipo}${i.talla ? ` ${i.talla}` : ''} × ${i.cantidad}`).join(', ');
+};
 ---
 <EkrLayout title="Resumen" active="dashboard" ctx={ctx}>
   <PageHeader title={`${saludo()}, ${profile.nombre.split(' ')[0]}`} subtitle="Así está el acompañamiento hoy.">
@@ -65,8 +79,7 @@ const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.colo
 
   {loadError && (
     <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">
-      <strong>No se pudieron cargar algunos datos:</strong> {loadError}.
-      ¿Ya ejecutaste <code class="rounded bg-white/70 px-1">supabase/001_panel_ekr.sql</code> en tu proyecto?
+      <strong>No se pudieron cargar algunos datos:</strong> {loadError}
     </div>
   )}
 
@@ -96,7 +109,7 @@ const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.colo
               <a href="/ekr/mensajes" class="flex items-start gap-3 px-5 py-3.5 transition hover:bg-cream">
                 <span class="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-salmon/15 text-salmon-deep"><Icon name="siren" size={16} /></span>
                 <div class="min-w-0 flex-1">
-                  <p class="text-sm font-semibold text-ink">{m.asunto}</p>
+                  <p class="text-sm font-semibold text-ink">{truncar(m.texto, 80) || 'Urgencia'}</p>
                   <p class="truncate text-sm text-blue-slate">
                     {benById.get(m.beneficiario_id)?.nombre ?? 'General'} · {profById.get(m.autor_id)?.nombre ?? 'Equipo'}
                   </p>
@@ -110,8 +123,8 @@ const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.colo
               <a href="/ekr/solicitudes" class="flex items-start gap-3 px-5 py-3.5 transition hover:bg-cream">
                 <span class="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-rosy-taupe/25 text-rose-deep"><Icon name="package" size={16} /></span>
                 <div class="min-w-0 flex-1">
-                  <p class="text-sm font-semibold text-ink">{s.insumo} <span class="font-normal text-blue-slate">× {s.cantidad}</span></p>
-                  <p class="truncate text-sm text-blue-slate">{benById.get(s.beneficiario_id)?.nombre ?? '—'} · pide {profById.get(s.solicitado_por)?.nombre ?? 'el equipo'}</p>
+                  <p class="text-sm font-semibold text-ink">{resumenItems(s.id)}</p>
+                  <p class="truncate text-sm text-blue-slate">{benById.get(s.beneficiario_id)?.nombre ?? '—'} · pide {profById.get(s.voluntaria_id)?.nombre ?? 'el equipo'}</p>
                 </div>
                 <div class="flex flex-col items-end gap-1">
                   <Badge tone={PRIORIDADES[s.urgencia as keyof typeof PRIORIDADES]?.tone ?? 'slate'}>Urgencia {PRIORIDADES[s.urgencia as keyof typeof PRIORIDADES]?.label.toLowerCase()}</Badge>
@@ -160,8 +173,11 @@ const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.colo
             <li>
               <a href={`/ekr/beneficiarios/${b.id}`} class="flex items-center gap-3 px-5 py-3 transition hover:bg-cream">
                 <Avatar nombre={b.nombre} size="sm" />
-                <div class="min-w-0 flex-1"><p class="truncate text-sm font-medium text-ink">{b.nombre}</p><p class="text-xs text-blue-slate">{b.comuna ?? 'Sin comuna'} · hace {diasDesde(b.fecha_ingreso)} días</p></div>
-                <Badge tone={PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.tone ?? 'slate'}>{PRIORIDADES[b.prioridad as keyof typeof PRIORIDADES]?.label ?? '—'}</Badge>
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm font-medium text-ink">{b.nombre}</p>
+                  <p class="text-xs text-blue-slate">{b.comuna ?? 'Sin comuna'} · desde {b.fecha_derivacion ? hace(b.fecha_derivacion) : 'sin fecha'}</p>
+                </div>
+                {b.estado === 'activo' && <Badge tone="slate">Activo</Badge>}
               </a>
             </li>
           ))}
@@ -181,7 +197,10 @@ const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.colo
             {(aud.data ?? []).map((a: any) => (
               <li class="flex items-center gap-3 px-5 py-3 text-sm">
                 <Badge tone={ACCION_AUDITORIA[a.accion]?.tone ?? 'slate'}>{ACCION_AUDITORIA[a.accion]?.label ?? a.accion}</Badge>
-                <span class="min-w-0 flex-1 truncate text-blue-slate"><span class="font-medium text-ink">{TABLA_LABEL[a.tabla] ?? a.tabla}</span> · {a.user_email ?? 'sistema'}</span>
+                <span class="min-w-0 flex-1 truncate text-blue-slate">
+                  <span class="font-medium text-ink">{TABLA_LABEL[a.entidad] ?? a.entidad}</span>
+                  {' '}· {profById.get(a.usuario_id)?.nombre ?? 'sistema'}
+                </span>
                 <span class="text-xs text-blue-slate/80 whitespace-nowrap">{hace(a.created_at)}</span>
               </li>
             ))}
@@ -190,7 +209,10 @@ const dona = donutGradient(segmentos.map((s) => ({ value: s.value, color: s.colo
       ) : (
         <ul class="divide-y divide-line">
           {mensajes.slice().sort((a: any, b: any) => b.created_at.localeCompare(a.created_at)).slice(0, 5).map((m: any) => (
-            <li class="px-5 py-3 text-sm"><p class="font-medium text-ink">{m.asunto}</p><p class="text-blue-slate">{truncar(m.cuerpo, 110)}</p></li>
+            <li class="px-5 py-3 text-sm">
+              <p class="font-medium text-ink">{m.tipo === 'urgencia' ? 'Urgencia' : 'Mensaje'}</p>
+              <p class="text-blue-slate">{truncar(m.texto, 110)}</p>
+            </li>
           ))}
         </ul>
       )}

@@ -12,12 +12,12 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/tailwind": "^6.0.2",
     "@iconify-json/lucide": "^1.2.142",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.3",
     "@tailwindcss/vite": "^4.3.3",
     "astro": "^7.3.8",
+    "exceljs": "^4.4.0",
     "tailwindcss": "^4.3.3"
   }
 }

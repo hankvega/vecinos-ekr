@@ -30,9 +30,9 @@ const totalPag = Math.max(1, Math.ceil(total / PER));
 // Perfiles para mapear usuario_id → nombre
 const usuarioIds = [...new Set((filas as any[]).map((f) => f.usuario_id).filter(Boolean))];
 const perfiles = usuarioIds.length
-  ? (await supabase.from('profiles').select('id,nombre,email').in('id', usuarioIds)).data ?? []
+  ? (await supabase.from('profiles').select('id,nombre,email,linked_user').in('linked_user', usuarioIds)).data ?? []
   : [];
-const perfilById = new Map<string, any>((perfiles as any[]).map((p: any) => [p.id, p]));
+const perfilByLinkedUser = new Map<string, any>((perfiles as any[]).map((p: any) => [p.linked_user, p]));
 
 const href = (over: Record<string, string | number>) => {
   const p = new URLSearchParams();
@@ -46,11 +46,11 @@ const href = (over: Record<string, string | number>) => {
   return '/ekr/auditoria' + (s ? `?${s}` : '');
 };
 
-function formatearValor(campo: string, v: unknown, perfilById: Map<string, any>): string {
+function formatearValor(campo: string, v: unknown, perfilByLinkedUser: Map<string, any>): string {
   if (v === null || v === undefined || v === '') return '∅';
   // uuid → nombre de perfil
   if (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
-    return perfilById.get(v)?.nombre ?? perfilById.get(v)?.email ?? v;
+    return perfilByLinkedUser.get(v)?.nombre ?? perfilByLinkedUser.get(v)?.email ?? v;
   }
   // Fecha ISO larga → dd/mm/yyyy hh:mm
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
@@ -121,7 +121,8 @@ function resumen(a: any): string {
 
 const nombreUsuario = (id: string | null) => {
   if (!id) return null;
-  return perfilById.get(id)?.nombre ?? perfilById.get(id)?.email ?? null;
+  const p = perfilByLinkedUser.get(id);
+  return p?.nombre ?? p?.email ?? null;
 };
 ---
 

@@ -57,6 +57,7 @@ export const TONE_ICON: Record<Tone, string> = {
   green: 'bg-emerald-600/10 text-emerald-700',
 };
 
+
 export const ESTADOS_BENEFICIARIO = {
   activo: { label: 'Activo', tone: 'green' as Tone, color: '#059669' },
   lista_espera: { label: 'Lista de espera', tone: 'taupe' as Tone, color: '#C19D94' },
@@ -94,6 +95,12 @@ export const TABLA_LABEL: Record<string, string> = {
   insumo_solicitudes: 'Solicitudes de insumos',
   mensajes: 'Mensajes',
   profiles: 'Voluntarios/equipo',
+  visitas: 'Visitas',
+  cuidadores: 'Cuidadores',
+  acciones: 'Bitácora',
+  adjuntos: 'Adjuntos',
+  export: 'Exportaciones',        // ← agrega esta
+  todo: 'Exportación completa',   // ← y esta
 };
 
 /* ───────────── Contexto y autorización ───────────── */
