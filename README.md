@@ -1,24 +1,17 @@
 # Vecinos que Acompañan con Compasión — Plataforma EKR
 
-Seguimiento de usuarios del programa. Stack: Astro (SSR) + Supabase + Tailwind CSS.
+Plataforma de seguimiento del programa de acompañamiento de la Fundación Elisabeth Kübler-Ross Chile.
+
+## Stack
+
+- **Astro 7** (SSR, `output: 'server'`)
+- **Supabase** (PostgreSQL + Auth + RLS)
+- **Tailwind CSS v4** (vía `@tailwindcss/vite`)
+- **ExcelJS** (exportación a `.xlsx`)
 
 ## Desarrollo local
 
-```sh
-cp .env.example .env.local   # y completa URL + anon key de Supabase
+```bash
+cp .env.example .env.local   # completar con URL + anon key de Supabase
 npm install
 npm run dev                  # http://localhost:4321
-```
-
-## Checklist de configuración en Supabase
-
-1. **Authentication → URL Configuration**: Site URL `http://localhost:4321`
-2. **Authentication → Users**: la funcionaria EKR debe estar invitada con su correo.
-3. **Table Editor → profiles**: su fila debe tener `linked_user` con el UUID del
-   usuario de Auth (lo hace el trigger al aceptar la invitación).
-
-## Estructura
-
-- `src/middleware.ts` — protege todas las rutas (salvo `/login` y `/api/auth/*`); exige sesión.
-- `src/lib/supabase.ts` — cliente server con manejo de cookies de sesión.
-- `src/pages/api/auth/` — magic link: `login` (POST), `callback` (GET), `logout` (GET).
