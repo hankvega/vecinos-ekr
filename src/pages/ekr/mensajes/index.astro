@@ -5,12 +5,12 @@ import Badge from '../../../components/Badge.astro';
 import Icon from '../../../components/Icon.astro';
 import Empty from '../../../components/Empty.astro';
 import Avatar from '../../../components/Avatar.astro';
-import { getEkrContext, back, str, porId, hace, fmtDateTime, firstError } from '../../../lib/ekr';
+import { getEkrContext, back, str, oneOf, porId, hace, fmtDateTime, firstError, truncar } from '../../../lib/ekr';
 
 const ctx = await getEkrContext(Astro);
 if (ctx instanceof Response) return ctx;
 const { supabase, profile } = ctx;
-const filtro = Astro.url.searchParams.get('ver') ?? 'abiertos';
+const filtro = Astro.url.searchParams.get('ver') ?? 'no_leidos';
 const aqui = `/ekr/mensajes?ver=${encodeURIComponent(filtro)}`;
 
 if (Astro.request.method === 'POST') {
@@ -18,29 +18,34 @@ if (Astro.request.method === 'POST') {
   const intent = str(form, 'intent');
 
   if (intent === 'crear') {
-    const asunto = str(form, 'asunto');
-    if (!asunto) return back(aqui, 'error', 'El asunto es obligatorio.');
+    const texto = str(form, 'texto');
+    if (!texto) return back(aqui, 'error', 'El texto es obligatorio.');
+    const tipo = oneOf(str(form, 'tipo'), ['mensaje', 'urgencia'] as const) ?? 'mensaje';
     const { error } = await supabase.from('mensajes').insert({
-      asunto, cuerpo: str(form, 'cuerpo'), beneficiario_id: str(form, 'beneficiario_id'),
-      urgente: form.get('urgente') === 'on', autor_id: profile.id, estado: 'abierto',
+      autor_id: profile.id,
+      beneficiario_id: str(form, 'beneficiario_id'),
+      tipo,
+      texto,
+      leido: false,
     });
     if (error) return back(aqui, 'error', 'No se pudo enviar: ' + error.message);
-    return back('/ekr/mensajes?ver=abiertos', 'ok', 'Mensaje registrado.');
+    return back('/ekr/mensajes?ver=no_leidos', 'ok', 'Mensaje registrado.');
   }
-  if (intent === 'atender' || intent === 'reabrir') {
+
+  if (intent === 'marcar-leido' || intent === 'marcar-no-leido') {
     const id = str(form, 'id');
     if (!id) return back(aqui, 'error', 'Falta el mensaje.');
-    const cambios = intent === 'atender'
-      ? { estado: 'atendido', atendido_por: profile.id, atendido_at: new Date().toISOString() }
-      : { estado: 'abierto', atendido_por: null, atendido_at: null };
-    const { error } = await supabase.from('mensajes').update(cambios).eq('id', id);
+    const { error } = await supabase
+      .from('mensajes')
+      .update({ leido: intent === 'marcar-leido' })
+      .eq('id', id);
     if (error) return back(aqui, 'error', 'No se pudo actualizar: ' + error.message);
-    return back(aqui, 'ok', intent === 'atender' ? 'Marcado como atendido.' : 'Mensaje reabierto.');
+    return back(aqui, 'ok', intent === 'marcar-leido' ? 'Marcado como leído.' : 'Marcado como no leído.');
   }
 }
 
 const [men, ben, prof] = await Promise.all([
-  supabase.from('mensajes').select('*'),
+  supabase.from('mensajes').select('*').order('created_at', { ascending: false }),
   supabase.from('beneficiarios').select('id,nombre,estado').order('nombre'),
   supabase.from('profiles').select('id,nombre'),
 ]);
@@ -49,35 +54,73 @@ const todos = men.data ?? [];
 const benById = porId<any>(ben.data ?? []);
 const profById = porId<any>(prof.data ?? []);
 
-const abiertos = todos.filter((m: any) => m.estado === 'abierto');
+const noLeidos = todos.filter((m: any) => !m.leido);
+const urgenciasAbiertas = noLeidos.filter((m: any) => m.tipo === 'urgencia');
+
 const lista = todos
-  .filter((m: any) => filtro === 'todos' || (filtro === 'atendidos' ? m.estado === 'atendido' : m.estado === 'abierto'))
-  .sort((a: any, b: any) => (b.urgente && b.estado === 'abierto' ? 1 : 0) - (a.urgente && a.estado === 'abierto' ? 1 : 0) || b.created_at.localeCompare(a.created_at));
+  .filter((m: any) => {
+    if (filtro === 'todos') return true;
+    if (filtro === 'no_leidos') return !m.leido;
+    if (filtro === 'leidos') return m.leido;
+    if (filtro === 'urgencias') return m.tipo === 'urgencia' && !m.leido;
+    return true;
+  })
+  .sort((a: any, b: any) => {
+    // Primero urgencias no leídas, luego el resto por fecha
+    const aUrg = a.tipo === 'urgencia' && !a.leido ? 1 : 0;
+    const bUrg = b.tipo === 'urgencia' && !b.leido ? 1 : 0;
+    if (aUrg !== bUrg) return bUrg - aUrg;
+    return b.created_at.localeCompare(a.created_at);
+  });
 
 const tabs = [
-  { k: 'abiertos', label: 'Abiertos', n: abiertos.length },
-  { k: 'atendidos', label: 'Atendidos', n: todos.length - abiertos.length },
+  { k: 'no_leidos', label: 'No leídos', n: noLeidos.length },
+  { k: 'urgencias', label: 'Urgencias abiertas', n: urgenciasAbiertas.length },
+  { k: 'leidos', label: 'Leídos', n: todos.length - noLeidos.length },
   { k: 'todos', label: 'Todos', n: todos.length },
 ];
-const urgAbiertas = abiertos.filter((m: any) => m.urgente).length;
 ---
+
 <EkrLayout title="Mensajes y urgencias" active="mensajes" ctx={ctx}>
-  <PageHeader title="Mensajes y urgencias" subtitle="Avisos del voluntariado y del equipo. Las urgencias abiertas aparecen primero.">
-    <a href="/api/ekr/export?hoja=mensajes" class="btn btn-ghost"><Icon name="file-spreadsheet" size={18} /> Exportar</a>
-    <a href="#nuevo" class="btn btn-accent"><Icon name="siren" size={18} /> Reportar urgencia</a>
+  <PageHeader
+    title="Mensajes y urgencias"
+    subtitle="Avisos internos y urgencias del equipo. Las urgencias no leídas aparecen primero."
+  >
+    <a href="/api/ekr/export?hoja=mensajes" class="btn btn-ghost">
+      <Icon name="file-spreadsheet" size={18} /> Exportar
+    </a>
+    <a href="#nuevo" class="btn btn-accent">
+      <Icon name="siren" size={18} /> Reportar urgencia
+    </a>
   </PageHeader>
 
-  {loadError && <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">No se pudieron cargar los datos: {loadError}</div>}
+  {loadError && (
+    <div role="alert" class="mb-5 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm text-salmon-deep">
+      No se pudieron cargar los datos: {loadError}
+    </div>
+  )}
 
-  {urgAbiertas > 0 && (
+  {urgenciasAbiertas.length > 0 && (
     <div role="status" class="mb-5 flex items-center gap-3 rounded-xl border border-salmon/40 bg-salmon/10 px-4 py-3 text-sm font-medium text-salmon-deep">
-      <Icon name="siren" size={18} /> {urgAbiertas === 1 ? 'Hay 1 urgencia abierta' : `Hay ${urgAbiertas} urgencias abiertas`} esperando atención.
+      <Icon name="siren" size={18} />
+      {urgenciasAbiertas.length === 1
+        ? 'Hay 1 urgencia sin leer'
+        : `Hay ${urgenciasAbiertas.length} urgencias sin leer`} esperando atención.
     </div>
   )}
 
   <nav aria-label="Filtrar" class="mb-4 flex flex-wrap gap-2">
     {tabs.map((t) => (
-      <a href={`/ekr/mensajes?ver=${t.k}`} aria-current={filtro === t.k ? 'page' : undefined} class:list={['rounded-full border px-3.5 py-1.5 text-sm font-medium transition', filtro === t.k ? 'border-blue-slate bg-blue-slate text-white' : 'border-line bg-white text-blue-slate hover:bg-cream']}>
+      <a
+        href={`/ekr/mensajes?ver=${t.k}`}
+        aria-current={filtro === t.k ? 'page' : undefined}
+        class:list={[
+          'rounded-full border px-3.5 py-1.5 text-sm font-medium transition',
+          filtro === t.k
+            ? 'border-blue-slate bg-blue-slate text-white'
+            : 'border-line bg-white text-blue-slate hover:bg-cream',
+        ]}
+      >
         {t.label} <span class="ml-1 opacity-70">{t.n}</span>
       </a>
     ))}
@@ -85,52 +128,98 @@ const urgAbiertas = abiertos.filter((m: any) => m.urgente).length;
 
   <div class="space-y-3">
     {lista.length === 0 ? (
-      <div class="card"><Empty icon="message-square" title={filtro === 'abiertos' ? 'No hay mensajes abiertos' : 'No hay mensajes'} text="Todo está al día." /></div>
-    ) : lista.map((m: any) => {
-      const urgente = m.urgente && m.estado === 'abierto';
-      return (
-        <article class:list={['card p-5', urgente && 'border-salmon/50 bg-salmon/[0.04]']}>
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div class="flex min-w-0 gap-3">
-              <Avatar nombre={profById.get(m.autor_id)?.nombre} />
-              <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <h3 class="font-semibold text-ink">{m.asunto}</h3>
-                  {m.urgente && <Badge tone="salmon" dot>Urgente</Badge>}
-                  {m.estado === 'atendido' && <Badge tone="green" dot>Atendido</Badge>}
+      <div class="card">
+        <Empty
+          icon="message-square"
+          title={filtro === 'no_leidos' ? 'No hay mensajes sin leer' : 'No hay mensajes'}
+          text="Todo está al día."
+        />
+      </div>
+    ) : (
+      lista.map((m: any) => {
+        const esUrgencia = m.tipo === 'urgencia';
+        const sinLeer = !m.leido;
+        return (
+          <article class:list={['card p-5', esUrgencia && sinLeer && 'border-salmon/50 bg-salmon/[0.04]']}>
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="flex min-w-0 gap-3">
+                <Avatar nombre={profById.get(m.autor_id)?.nombre} />
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    {esUrgencia && <Badge tone="salmon" dot>Urgencia</Badge>}
+                    {sinLeer && !esUrgencia && <Badge tone="taupe" dot>Sin leer</Badge>}
+                    {!sinLeer && <Badge tone="green" dot>Leído</Badge>}
+                  </div>
+                  <p class="mt-1 text-sm text-blue-slate">
+                    {profById.get(m.autor_id)?.nombre ?? 'Equipo'} ·{' '}
+                    <span title={fmtDateTime(m.created_at)}>{hace(m.created_at)}</span>
+                    {m.beneficiario_id && (
+                      <>
+                        {' · '}
+                        <a class="link" href={`/ekr/beneficiarios/${m.beneficiario_id}`}>
+                          {benById.get(m.beneficiario_id)?.nombre ?? '—'}
+                        </a>
+                      </>
+                    )}
+                  </p>
                 </div>
-                <p class="mt-0.5 text-sm text-blue-slate">
-                  {profById.get(m.autor_id)?.nombre ?? 'Equipo'} · <span title={fmtDateTime(m.created_at)}>{hace(m.created_at)}</span>
-                  {m.beneficiario_id && <> · <a class="link" href={`/ekr/beneficiarios/${m.beneficiario_id}`}>{benById.get(m.beneficiario_id)?.nombre ?? '—'}</a></>}
-                </p>
               </div>
+              <form method="post">
+                <input type="hidden" name="id" value={m.id} />
+                {sinLeer ? (
+                  <button class="btn btn-primary btn-sm" type="submit" name="intent" value="marcar-leido">
+                    <Icon name="check" size={14} /> Marcar leído
+                  </button>
+                ) : (
+                  <button class="btn btn-ghost btn-sm" type="submit" name="intent" value="marcar-no-leido">
+                    Marcar no leído
+                  </button>
+                )}
+              </form>
             </div>
-            <form method="post">
-              <input type="hidden" name="id" value={m.id} />
-              {m.estado === 'abierto'
-                ? <button class="btn btn-primary btn-sm" type="submit" name="intent" value="atender"><Icon name="check" size={14} /> Marcar atendido</button>
-                : <button class="btn btn-ghost btn-sm" type="submit" name="intent" value="reabrir">Reabrir</button>}
-            </form>
-          </div>
-          {m.cuerpo && <p class="mt-3 pl-12 text-sm whitespace-pre-line text-ink/85">{m.cuerpo}</p>}
-          {m.estado === 'atendido' && m.atendido_at && <p class="mt-2 pl-12 text-xs text-blue-slate">Atendido por {profById.get(m.atendido_por)?.nombre ?? 'el equipo'} · {fmtDateTime(m.atendido_at)}</p>}
-        </article>
-      );
-    })}
+            <p class="mt-3 pl-12 text-sm whitespace-pre-line text-ink/85">{m.texto}</p>
+          </article>
+        );
+      })
+    )}
   </div>
 
   <section id="nuevo" class="card mt-6 scroll-mt-6 p-5" aria-labelledby="h-nuevo">
     <h2 id="h-nuevo" class="font-semibold text-ink">Nuevo mensaje</h2>
     <form method="post" class="mt-4 grid gap-3 md:grid-cols-2">
       <input type="hidden" name="intent" value="crear" />
-      <div><label class="label" for="asunto">Asunto *</label><input class="input" id="asunto" name="asunto" required maxlength="140" /></div>
-      <div><label class="label" for="beneficiario_id">Persona relacionada</label>
-        <select class="input" id="beneficiario_id" name="beneficiario_id"><option value="">Ninguna / general</option>{(ben.data ?? []).map((b: any) => <option value={b.id}>{b.nombre}</option>)}</select>
+      <div>
+        <label class="label" for="tipo">Tipo</label>
+        <select class="input" id="tipo" name="tipo">
+          <option value="mensaje">Mensaje</option>
+          <option value="urgencia">Urgencia</option>
+        </select>
       </div>
-      <div class="md:col-span-2"><label class="label" for="cuerpo">Detalle</label><textarea class="input" id="cuerpo" name="cuerpo" rows="3" maxlength="2000"></textarea></div>
-      <div class="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
-        <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink"><input type="checkbox" name="urgente" class="size-4 accent-salmon" /> Es una urgencia (requiere atención hoy)</label>
-        <button class="btn btn-primary" type="submit"><Icon name="send" size={16} /> Enviar</button>
+      <div>
+        <label class="label" for="beneficiario_id">Persona relacionada</label>
+        <select class="input" id="beneficiario_id" name="beneficiario_id">
+          <option value="">Ninguna / general</option>
+          {(ben.data ?? []).map((b: any) => (
+            <option value={b.id}>{b.nombre}</option>
+          ))}
+        </select>
+      </div>
+      <div class="md:col-span-2">
+        <label class="label" for="texto">Mensaje *</label>
+        <textarea
+          class="input"
+          id="texto"
+          name="texto"
+          rows="3"
+          required
+          maxlength="2000"
+          placeholder="Detalle del mensaje o urgencia…"
+        ></textarea>
+      </div>
+      <div class="md:col-span-2 flex justify-end">
+        <button class="btn btn-primary" type="submit">
+          <Icon name="send" size={16} /> Enviar
+        </button>
       </div>
     </form>
   </section>
