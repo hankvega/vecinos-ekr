@@ -42,7 +42,7 @@ const nav = [
 
   <div id="overlay" class="fixed inset-0 z-30 hidden bg-ink/40 lg:hidden print:hidden"></div>
 
-  <div class="lg:grid lg:min-h-screen lg:grid-cols-[17.5rem_1fr]">
+  <div class="overflow-x-hiddenlg:grid lg:min-h-screen lg:grid-cols-[17.5rem_1fr]">
     <aside
       id="sidebar"
       class="fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col border-r border-line bg-white transition-transform duration-200 data-[open=true]:translate-x-0 lg:sticky lg:top-0 lg:h-screen lg:w-auto lg:translate-x-0 print:hidden"
@@ -97,7 +97,7 @@ const nav = [
       </div>
     </aside>
 
-    <main id="contenido" class="min-w-0 px-4 py-6 sm:px-8 lg:py-9 print:p-0">
+    <main id="contenido" class="min-w-0 overflow-x-hidden px-4 py-6 sm:px-8 lg:py-9 print:p-0">
       <div class="mx-auto max-w-[1280px]">
         <Flash />
         <slot />
