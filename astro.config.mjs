@@ -1,11 +1,16 @@
 import { defineConfig, envField } from 'astro/config';
+import cloudflare from '@astrojs/cloudflare';
 import tailwindcss from '@tailwindcss/vite';
+
+
 
 export default defineConfig({
   output: 'server',
+  adapter: cloudflare(),
   vite: {
     plugins: [tailwindcss()],
   },
+
   env: {
     schema: {
       SUPABASE_URL: envField.string({ 
@@ -15,8 +20,9 @@ export default defineConfig({
       SUPABASE_ANON_KEY: envField.string({ 
         context: 'server', 
         access: 'secret',
-        optional: true 
       }),
     },
   },
+
+  adapter: cloudflare(),
 });
