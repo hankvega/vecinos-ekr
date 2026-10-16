@@ -3,26 +3,26 @@
 /* Paleta de marca. Los tonos "deep", ink, cream y line son derivados de la paleta
    (más oscuros/claros) para lograr contraste legible en texto y fondos. */
 @theme {
-  --color-blue-slate: #5E686F;
-  --color-dusty-rose: #AC7E81;
-  --color-rosy-taupe: #C19D94;
-  --color-salmon: #F9736B;
+  --color-blue-slate: #3B4448;      /* texto secundario: gris muy oscuro azulado */
+  --color-dusty-rose: #7A4A50;      /* rosado profundo, para acentos */
+  --color-rosy-taupe: #A07872;      /* taupe medio, para fondos suaves */
+  --color-salmon: #FA1A0E;          /* NARANJA INTENSO */
 
-  --color-ink: #3A4247;         /* blue-slate oscurecido: títulos */
-  --color-rose-deep: #8B5C60;   /* dusty-rose oscurecido: texto sobre fondos claros */
-  --color-salmon-deep: #B8403A; /* salmon oscurecido: texto de alerta */
-  --color-cream: #FBF8F7;       /* fondo cálido de la app */
-  --color-line: #ECE5E2;        /* bordes suaves */
+  --color-ink: #1A1E20;             /* texto principal: casi negro */
+  --color-rose-deep: #820826;       /* MAGENTA OSCURO */
+  --color-salmon-deep: #B8420E;     /* naranja oscuro para texto sobre fondos claros */
+  --color-cream: #FBF8F7;           /* fondo cálido */
+  --color-line: #DDD2CB;            /* bordes más marcados */
 
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
 /* Alias para páginas con estilos propios (login) */
 :root {
-  --blue-slate: #5E686F;
-  --dusty-rose: #AC7E81;
-  --rosy-taupe: #C19D94;
-  --salmon: #F9736B;
+  --blue-slate: #0c4872;
+  --dusty-rose: #a7434a;
+  --rosy-taupe: #be7d6c;
+  --salmon: #fa1a0e;
 }
 
 @layer base {
