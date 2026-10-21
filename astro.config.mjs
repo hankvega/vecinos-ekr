@@ -4,7 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   output: 'server',
   adapter: cloudflare({
-    session: false, // Evita el binding KV que causaba el error 1101
+    session: false,
+    streaming: false, // Evita el binding KV que causaba el error 1101
   }),
   vite: {
     plugins: [tailwindcss()],
