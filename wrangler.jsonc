@@ -1,8 +1,10 @@
 {
   "name": "ekr-curacavi",
   "compatibility_date": "2026-10-12",
-  "compatibility_flags": ["nodejs_compat"],
-  "main": "src/fetch.ts",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "fetch_iterable_type_support"
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS"
